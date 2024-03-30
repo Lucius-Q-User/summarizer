@@ -10,27 +10,53 @@ import os
 from jinja2 import Environment
 from collections import namedtuple
 import huggingface_hub
+import time
+from yt_dlp import YoutubeDL
+from tempfile import TemporaryDirectory
 
 Segment = namedtuple('Segment', ['hour', 'minute', 'text'])
 HourSummary = namedtuple('HourSummary', ['overall', 'parts'])
 
-INVIDIOUS_INSTANCE = 'https://invidious.fdn.fr'
 OUT_DIR = 'out'
 AUDIO_FILE = 'audio.m4a'
 WHISPER_MODEL = 'ggml-base.en.bin'
 MISTRAL_MODEL = 'mistral-7b-instruct-v0.2.Q8_0.gguf'
 
+def find_vtt(fmts):
+    for fmt in fmts:
+        if fmt['ext'] == 'vtt':
+            return fmt['url']
+    return None
+
+def extract_sub_url(video_info):
+    if 'subtitles' in video_info:
+        subs = video_info['subtitles']
+        lang = None
+        for k in subs.keys():
+            if k.startswith('en'):
+                lang = k
+                break
+        if lang is not None:
+            url = find_vtt(subs[lang])
+            if url is not None:
+                return url
+    if 'automatic_captions' in video_info:
+        lang = None
+        subs = video_info['automatic_captions']
+        if 'en-orig' in subs:
+            lang = 'en-orig'
+        elif 'en' in subs:
+            lang = 'en'
+        else:
+            return None
+        return find_vtt(subs[lang])
+    return None
+
 def download_captions(video_info):
-    captions = video_info['captions']
-    if len(captions) == 0:
+    url = extract_sub_url(video_info)
+    if url is None:
         return None
-    cap_link = captions[0]['url']
-
-    #for cap in captions:
-    #    if cap['language_code'] == 'en':
-    #        cap_link = cap['url']
-
-    vtt = requests.get(f'{INVIDIOUS_INSTANCE}{cap_link}').text
+    vtt = requests.get(url).text
     segments = []
     for caption in webvtt.read_buffer(StringIO(vtt)):
         start_parts = caption.start.split(':')
@@ -51,7 +77,7 @@ def fetch_ffmpeg():
     ffmpeg = f'{alt_path}/ffmpeg'
     if os.path.isfile(ffmpeg):
         return ffmpeg
-    zip_data = BytesIO(requests.get("https://evermeet.cx/ffmpeg/get/zip").content)
+    zip_data = BytesIO(requests.get('https://evermeet.cx/ffmpeg/get/zip').content)
     with ZipFile(zip_data, 'r') as zf:
         with zf.open(zf.namelist()[0]) as entry:
             with open(ffmpeg, 'wb') as target:
@@ -61,23 +87,14 @@ def fetch_ffmpeg():
 
 
 
-def generate_captions(video_url):
-    from yt_dlp import YoutubeDL
+def generate_captions(ydl, video_url, tmpdir):
     import numpy as np
     import whisper_cpp
-    from tempfile import TemporaryDirectory
     import ffmpeg
 
     ffmpeg_cmd = fetch_ffmpeg()
-    with TemporaryDirectory() as tmpdir:
-        info = {
-            'format': 'm4a/bestaudio/best',
-            'paths': {'temp': tmpdir, 'home': tmpdir},
-            'outtmpl': {'default': AUDIO_FILE}
-        }
-        with YoutubeDL(info) as ydl:
-            ydl.download(video_url)
-        samples, _ = ffmpeg.input(f'{tmpdir}/{AUDIO_FILE}').output('-', format='s16le', acodec='pcm_s16le', ac=1, ar=16000).run(cmd=[ffmpeg_cmd, '-nostdin'], capture_stdout=True, capture_stderr=False)
+    ydl.download(video_url)
+    samples, _ = ffmpeg.input(f'{tmpdir}/{AUDIO_FILE}').output('-', format='s16le', acodec='pcm_s16le', ac=1, ar=16000).run(cmd=[ffmpeg_cmd, '-nostdin'], capture_stdout=True, capture_stderr=False)
     samples = np.frombuffer(samples, np.int16).flatten().astype(np.float32) / 32768.0
     model = huggingface_hub.hf_hub_download('ggerganov/whisper.cpp', WHISPER_MODEL)
     ws = whisper_cpp.Whisper(model, whisper_cpp.WHISPER_AHEADS_BASE_EN)
@@ -122,12 +139,17 @@ def summarize_all(sections):
 
 def main():
     video_url = sys.argv[1]
-    video_id = parse.parse_qs(parse.urlparse(video_url).query)['v'][0]
-    video_info = requests.get(f'{INVIDIOUS_INSTANCE}/api/v1/videos/{video_id}').json()
-    captions = download_captions(video_info)
-    if captions is None:
-        captions = generate_captions(video_url)
-
+    with TemporaryDirectory() as tmpdir:
+        info = {
+            'format': 'm4a/bestaudio/best',
+            'paths': {'temp': tmpdir, 'home': tmpdir},
+            'outtmpl': {'default': AUDIO_FILE}
+        }
+        with YoutubeDL(info) as ydl:
+            video_info = ydl.extract_info(video_url, download=False)
+            captions = download_captions(video_info)
+            if captions is None:
+                captions = generate_captions(ydl, video_url, tmpdir)
     sections = sectionize_captions(captions)
     summaries = summarize_all(sections)
 
@@ -135,8 +157,9 @@ def main():
     template_path = f'{os.path.dirname(__file__)}/template.j'
     templ = env.from_string(open(template_path).read())
     os.makedirs(OUT_DIR, exist_ok=True)
-    filename = f'{OUT_DIR}/{video_id}.html'
     title = video_info['title']
+    video_id = video_info['id']
+    filename = f'{OUT_DIR}/{video_id}.html'
     with open(filename, 'w') as out:
         out.write(templ.render(title=title, video_id=video_id, summaries=summaries, enumerate=enumerate))
     os.execlp('open', 'open', filename)
