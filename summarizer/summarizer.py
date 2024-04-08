@@ -174,10 +174,10 @@ def sectionize_captions(captions):
     for caption in captions:
         hour = caption.start // 3600
         minute = (caption.start % 3600) // 60
-        if len(sections) - 1 < hour:
+        while len(sections) - 1 < hour:
             sections.append([])
         hr_sect = sections[hour]
-        if len(hr_sect) - 1 < minute // 5:
+        while len(hr_sect) - 1 < minute // 5:
             hr_sect.append([])
         hr_sect[minute // 5].append(caption.text)
     return sections
@@ -185,14 +185,31 @@ def sectionize_captions(captions):
 def summarize_hour(llm, hr_sect):
     summaries = []
     for min_sect in hr_sect:
-        prompt = f'The following is a transcript of a section of a video.\n{" ".join(min_sect)}\n Based on the previous transcript, describe what is happening in this section'
-        summaries.append(llm.run_llm(prompt))
-    summaries = [x.join() for x in summaries]
+        if len(min_sect) != 0:
+            prompt = f'The following is a transcript of a section of a video.\n{" ".join(min_sect)}\n Based on the previous transcript, describe what is happening in this section'
+            summaries.append(llm.run_llm(prompt))
+        else:
+            summaries.append(None)
+    summaries = [(x.join() if x is not None else "") for x in summaries]
     all_sects = '\n'.join(summaries)
     prompt = f'The following is a set of summaries of sections of a video.\n{all_sects}\nTake those summaries of individual sections and distill it into a consolidated summary of the entire video.'
     hr_summary = llm.run_llm(prompt).join()
     return HourSummary(hr_summary, summaries)
 
+def caption_in_segment(caption, segment):
+    return not (caption.end < segment['segment'][0] or segment['segment'][1] < caption.start)
+
+def caption_in_segments(caption, segments):
+    return any(caption_in_segment(caption, segment) for segment in segments)
+
+def remove_sponsored(video_id, types, captions):
+    if len(types) == 0:
+        return captions
+    url = f'https://sponsor.ajay.app/api/skipSegments?videoID={video_id}'
+    for t in types:
+        url += f'&category={t}'
+    segments = requests.get(url).json()
+    return [caption for caption in captions if not caption_in_segments(caption, segments)]
 
 LOCAL_PROVIDER = 'local'
 PROVIDERS = {
@@ -204,6 +221,7 @@ def main():
     parser = ArgumentParser(prog='summarize')
     parser.add_argument('video_url')
     parser.add_argument('-lp', '--llm-provider', choices = PROVIDERS.keys(), default = LOCAL_PROVIDER)
+    parser.add_argument('-sb', '--sponsorblock', choices = ['sponsor', 'selfpromo', 'interaction', 'intro', 'outro', 'preview', 'music', 'offtopic', 'filler'], action = 'append', default = [])
     args = parser.parse_args()
 
     with TemporaryDirectory() as tmpdir:
@@ -218,6 +236,7 @@ def main():
             if captions is None:
                 captions = generate_captions(ydl, args.video_url, tmpdir)
     video_id = video_info['id']
+    captions = remove_sponsored(video_id, args.sponsorblock, captions)
     sections = sectionize_captions(captions)
     llm = PROVIDERS[args.llm_provider]()
     summaries = [summarize_hour(llm, x) for x in sections]

@@ -16,10 +16,12 @@
     <p>{{hr_summary.overall}}</p>
     <ul>
     {% for j, sec in enumerate(hr_summary['parts']) %}
+    {% if sec != "" %}
      <li>
       <strong><a href="https://youtube.com/watch?v={{video_id}}&t={{i * 3600 + j * 300}}" target="_blank">{{"{:02d}".format(i)}}:{{"{:02d}".format(j * 5)}}:00</a></strong>
       {{sec}}
      </li>
+    {% endif %}
     {% endfor %}
     </ul>
    </section>
