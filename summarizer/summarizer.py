@@ -1,26 +1,91 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import requests
-import sys
 import webvtt
 from io import StringIO, BytesIO
-from llama_cpp import Llama
 import urllib.parse as parse
 import os
 from jinja2 import Environment
 from collections import namedtuple
 import huggingface_hub
-import time
 from yt_dlp import YoutubeDL
 from tempfile import TemporaryDirectory
+from argparse import ArgumentParser
+from threading import Thread
+import json
+import time
 
-Segment = namedtuple('Segment', ['hour', 'minute', 'text'])
+Segment = namedtuple('Segment', ['start', 'end', 'text'])
 HourSummary = namedtuple('HourSummary', ['overall', 'parts'])
 
 OUT_DIR = 'out'
 AUDIO_FILE = 'audio.m4a'
 WHISPER_MODEL = 'ggml-base.en.bin'
 MISTRAL_MODEL = 'mistral-7b-instruct-v0.2.Q8_0.gguf'
+GROQ_API_KEY_VAR = 'GROQ_API_KEY'
+
+class LocalLLMWorker(object):
+    def __init__(self, llm, prompt):
+        self.llm = llm
+        self.prompt = prompt
+    def join(self):
+        inst = f'[INST] {self.prompt} [/INST]'
+        return self.cleanup(self.llm.llama(inst, max_tokens=None)['choices'][0]['text'])
+    def cleanup(self, st):
+        if len(st) == 0:
+            return st
+        for i, v in enumerate(st):
+            if v.isalnum():
+                break
+        return st[i:]
+
+class LocalLLM(object):
+    def __init__(self):
+        from llama_cpp import Llama
+        model = huggingface_hub.hf_hub_download('TheBloke/Mistral-7B-Instruct-v0.2-GGUF', MISTRAL_MODEL)
+        self.llama = Llama(
+             model, n_gpu_layers=-1, n_ctx=32768#, verbose=False
+        )
+    def run_llm(self, prompt):
+        return LocalLLMWorker(self, prompt)
+
+class GroqLLMWorker(object):
+    def __init__(self, api_key, prompt):
+        self.api_key = api_key
+        self.prompt = prompt
+        self.thread = Thread(target = self)
+        self.thread.start()
+    def __call__(self):
+        req = {
+            'model': 'mixtral-8x7b-32768',
+            'max_tokens': 32768,
+            'messages': [
+                {'role': 'user','content': self.prompt}
+            ]
+        }
+        headers = {
+            'Authorization': f'Bearer {self.api_key}'
+        }
+        while 1:
+            resp = requests.post('https://api.groq.com/openai/v1/chat/completions', headers = headers, data = json.dumps(req))
+            if resp.status_code == 429:
+                time.sleep(int(resp.headers['retry-after']) + 2)
+                continue
+            self.result = resp.json()['choices'][0]['message']['content']
+            return
+
+    def join(self):
+        self.thread.join()
+        return self.result
+
+class GroqLLM(object):
+    def __init__(self):
+        if GROQ_API_KEY_VAR in os.environ:
+            self.api_key = os.environ[GROQ_API_KEY_VAR]
+        else:
+            self.api_key = json.load(open(f'{os.environ["HOME"]}/.config/summarize.json'))[GROQ_API_KEY_VAR]
+    def run_llm(self, prompt):
+        return GroqLLMWorker(self.api_key, prompt)
 
 def find_vtt(fmts):
     for fmt in fmts:
@@ -52,6 +117,13 @@ def extract_sub_url(video_info):
         return find_vtt(subs[lang])
     return None
 
+def time_to_secs(time):
+    parts = time.split(':')
+    hour = int(parts[0])
+    minute = int(parts[1])
+    second, _ = parts[2].split('.')
+    return hour * 3600 + minute * 60 + int(second)
+
 def download_captions(video_info):
     url = extract_sub_url(video_info)
     if url is None:
@@ -59,11 +131,9 @@ def download_captions(video_info):
     vtt = requests.get(url).text
     segments = []
     for caption in webvtt.read_buffer(StringIO(vtt)):
-        start_parts = caption.start.split(':')
-        hour = int(start_parts[0])
-        minute = int(start_parts[1])
-        second, _ = start_parts[2].split('.')
-        segments.append(Segment(hour, minute, caption.text))
+        start = time_to_secs(caption.start)
+        end = time_to_secs(caption.end)
+        segments.append(Segment(start, end, caption.text))
     return segments
 
 def fetch_ffmpeg():
@@ -86,7 +156,6 @@ def fetch_ffmpeg():
     return ffmpeg
 
 
-
 def generate_captions(ydl, video_url, tmpdir):
     import numpy as np
     import whisper_cpp
@@ -98,47 +167,45 @@ def generate_captions(ydl, video_url, tmpdir):
     samples = np.frombuffer(samples, np.int16).flatten().astype(np.float32) / 32768.0
     model = huggingface_hub.hf_hub_download('ggerganov/whisper.cpp', WHISPER_MODEL)
     ws = whisper_cpp.Whisper(model, whisper_cpp.WHISPER_AHEADS_BASE_EN)
-    return [Segment(x.start // 3600, x.start // 60 % 60, x.text) for x in ws.transcribe(samples)]
+    return ws.transcribe(samples)
 
 def sectionize_captions(captions):
     sections = []
     for caption in captions:
-        if len(sections) - 1 < caption.hour:
+        hour = caption.start // 3600
+        minute = (caption.start % 3600) // 60
+        if len(sections) - 1 < hour:
             sections.append([])
-        hr_sect = sections[caption.hour]
-        if len(hr_sect) - 1 < caption.minute // 5:
+        hr_sect = sections[hour]
+        if len(hr_sect) - 1 < minute // 5:
             hr_sect.append([])
-        hr_sect[caption.minute // 5].append(caption.text)
+        hr_sect[minute // 5].append(caption.text)
     return sections
-
-def cleanup(st):
-    if len(st) == 0:
-        return st
-    for i, v in enumerate(st):
-        if v.isalnum():
-            break
-    return st[i:]
 
 def summarize_hour(llm, hr_sect):
     summaries = []
     for min_sect in hr_sect:
-        prompt = f'[INST] The following is a transcript of a section of a video.\n{" ".join(min_sect)}\n Based on the previous transcript, describe what is happening in this section [/INST]'
-        summaries.append(cleanup(llm(prompt, max_tokens=None)['choices'][0]['text']))
-        llm.reset()
+        prompt = f'The following is a transcript of a section of a video.\n{" ".join(min_sect)}\n Based on the previous transcript, describe what is happening in this section'
+        summaries.append(llm.run_llm(prompt))
+    summaries = [x.join() for x in summaries]
     all_sects = '\n'.join(summaries)
-    prompt = f'[INST] The following is a set of summaries of sections of a video.\n{all_sects}\nTake those summaries of individual sections and distill it into a consolidated summary of the entire video. [/INST]'
-    hr_summary = cleanup(llm(prompt, max_tokens=None)['choices'][0]['text'])
+    prompt = f'The following is a set of summaries of sections of a video.\n{all_sects}\nTake those summaries of individual sections and distill it into a consolidated summary of the entire video.'
+    hr_summary = llm.run_llm(prompt).join()
     return HourSummary(hr_summary, summaries)
 
-def summarize_all(sections):
-    model = model = huggingface_hub.hf_hub_download('TheBloke/Mistral-7B-Instruct-v0.2-GGUF', MISTRAL_MODEL)
-    llm = Llama(
-        model, n_gpu_layers=-1, n_ctx=32768#, verbose=False
-    )
-    return [summarize_hour(llm, x) for x in sections]
+
+LOCAL_PROVIDER = 'local'
+PROVIDERS = {
+    LOCAL_PROVIDER: LocalLLM,
+    'groq': GroqLLM
+}
 
 def main():
-    video_url = sys.argv[1]
+    parser = ArgumentParser(prog='summarize')
+    parser.add_argument('video_url')
+    parser.add_argument('-lp', '--llm-provider', choices = PROVIDERS.keys(), default = LOCAL_PROVIDER)
+    args = parser.parse_args()
+
     with TemporaryDirectory() as tmpdir:
         info = {
             'format': 'm4a/bestaudio/best',
@@ -146,19 +213,20 @@ def main():
             'outtmpl': {'default': AUDIO_FILE}
         }
         with YoutubeDL(info) as ydl:
-            video_info = ydl.extract_info(video_url, download=False)
+            video_info = ydl.extract_info(args.video_url, download=False)
             captions = download_captions(video_info)
             if captions is None:
-                captions = generate_captions(ydl, video_url, tmpdir)
+                captions = generate_captions(ydl, args.video_url, tmpdir)
+    video_id = video_info['id']
     sections = sectionize_captions(captions)
-    summaries = summarize_all(sections)
+    llm = PROVIDERS[args.llm_provider]()
+    summaries = [summarize_hour(llm, x) for x in sections]
 
     env = Environment()
     template_path = f'{os.path.dirname(__file__)}/template.j'
     templ = env.from_string(open(template_path).read())
     os.makedirs(OUT_DIR, exist_ok=True)
     title = video_info['title']
-    video_id = video_info['id']
     filename = f'{OUT_DIR}/{video_id}.html'
     with open(filename, 'w') as out:
         out.write(templ.render(title=title, video_id=video_id, summaries=summaries, enumerate=enumerate))
