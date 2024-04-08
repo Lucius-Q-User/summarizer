@@ -14,6 +14,9 @@ from argparse import ArgumentParser
 from threading import Thread
 import json
 import time
+import sys
+import shutil
+
 
 Segment = namedtuple('Segment', ['start', 'end', 'text'])
 HourSummary = namedtuple('HourSummary', ['overall', 'parts'])
@@ -23,6 +26,8 @@ AUDIO_FILE = 'audio.m4a'
 WHISPER_MODEL = 'ggml-base.en.bin'
 MISTRAL_MODEL = 'mistral-7b-instruct-v0.2.Q8_0.gguf'
 GROQ_API_KEY_VAR = 'GROQ_API_KEY'
+XDG_CACHE_HOME = 'XDG_CACHE_HOME'
+XDG_CONFIG_HOME = 'XDG_CONFIG_HOME'
 
 class LocalLLMWorker(object):
     def __init__(self, llm, prompt):
@@ -83,7 +88,11 @@ class GroqLLM(object):
         if GROQ_API_KEY_VAR in os.environ:
             self.api_key = os.environ[GROQ_API_KEY_VAR]
         else:
-            self.api_key = json.load(open(f'{os.environ["HOME"]}/.config/summarize.json'))[GROQ_API_KEY_VAR]
+            if XDG_CONFIG_HOME in os.environ:
+                cfg_dir = os.environ[XDG_CONFIG_HOME]
+            else:
+                cfg_dir = f'{os.environ["HOME"]}/.config'
+            self.api_key = json.load(open(f'{cfg_dir}/summarize.json'))[GROQ_API_KEY_VAR]
     def run_llm(self, prompt):
         return GroqLLMWorker(self.api_key, prompt)
 
@@ -137,21 +146,36 @@ def download_captions(video_info):
     return segments
 
 def fetch_ffmpeg():
-    import shutil
     ffmpeg = 'ffmpeg'
     if shutil.which(ffmpeg) is not None:
         return ffmpeg
-    from zipfile import ZipFile
-    alt_path = f'{os.environ["HOME"]}/.cache/summarize'
+    if XDG_CACHE_HOME in os.environ:
+        cache_path = os.environ[XDG_CACHE_HOME]
+    else:
+        cache_path = f'{os.environ["HOME"]}/.cache'
+    alt_path = f'{cache_path}/summarize'
     os.makedirs(alt_path, exist_ok=True)
     ffmpeg = f'{alt_path}/ffmpeg'
     if os.path.isfile(ffmpeg):
         return ffmpeg
-    zip_data = BytesIO(requests.get('https://evermeet.cx/ffmpeg/get/zip').content)
-    with ZipFile(zip_data, 'r') as zf:
-        with zf.open(zf.namelist()[0]) as entry:
-            with open(ffmpeg, 'wb') as target:
-                target.write(entry.read())
+    if sys.platform == 'darwin':
+        from zipfile import ZipFile
+        zip_data = BytesIO(requests.get('https://evermeet.cx/ffmpeg/get/zip').content)
+        with ZipFile(zip_data, 'r') as zf:
+            with zf.open(zf.namelist()[0]) as entry:
+                with open(ffmpeg, 'wb') as target:
+                    target.write(entry.read())
+    elif sys.platform == 'linux':
+        import tarfile
+        data = BytesIO(requests.get('https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz').content)
+        with tarfile.open(mode='r:xz', fileobj=data) as tar:
+            member = tar.next()
+            while member is not None:
+                if member.name.endswith('/ffmpeg'):
+                    with open(ffmpeg, 'wb') as target:
+                        target.write(tar.extractfile(member).read())
+                    break
+                member = tar.next()
     os.chmod(ffmpeg, 0o755)
     return ffmpeg
 
@@ -249,7 +273,11 @@ def main():
     filename = f'{OUT_DIR}/{video_id}.html'
     with open(filename, 'w') as out:
         out.write(templ.render(title=title, video_id=video_id, summaries=summaries, enumerate=enumerate))
-    os.execlp('open', 'open', filename)
+    for opener in ['open', 'xdg-open']:
+        if shutil.which(opener) is not None:
+            os.execlp(opener, opener, filename)
+            return
+    print(f'Unable to open the file automatically, the output was written to {filename}')
 
 if __name__ == '__main__':
     main()
