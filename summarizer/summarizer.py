@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import requests
-import webvtt
 from io import StringIO, BytesIO
 import urllib.parse as parse
 import os
@@ -96,9 +95,9 @@ class GroqLLM(object):
     def run_llm(self, prompt):
         return GroqLLMWorker(self.api_key, prompt)
 
-def find_vtt(fmts):
+def find_json3(fmts):
     for fmt in fmts:
-        if fmt['ext'] == 'vtt':
+        if fmt['ext'] == 'json3':
             return fmt['url']
     return None
 
@@ -111,7 +110,7 @@ def extract_sub_url(video_info):
                 lang = k
                 break
         if lang is not None:
-            url = find_vtt(subs[lang])
+            url = find_json3(subs[lang])
             if url is not None:
                 return url
     if 'automatic_captions' in video_info:
@@ -123,26 +122,21 @@ def extract_sub_url(video_info):
             lang = 'en'
         else:
             return None
-        return find_vtt(subs[lang])
+        return find_json3(subs[lang])
     return None
-
-def time_to_secs(time):
-    parts = time.split(':')
-    hour = int(parts[0])
-    minute = int(parts[1])
-    second, _ = parts[2].split('.')
-    return hour * 3600 + minute * 60 + int(second)
 
 def download_captions(video_info):
     url = extract_sub_url(video_info)
     if url is None:
         return None
-    vtt = requests.get(url).text
+    events = requests.get(url).json()['events']
     segments = []
-    for caption in webvtt.read_buffer(StringIO(vtt)):
-        start = time_to_secs(caption.start)
-        end = time_to_secs(caption.end)
-        segments.append(Segment(start, end, caption.text))
+    for event in events:
+        text = ''.join(x['utf8'] for x in event.get('segs', []))
+        if text == '':
+            continue
+        start = event['tStartMs']
+        segments.append(Segment(start // 1000, (start + event.get('dDurationMs', 0)) // 1000, text))
     return segments
 
 def fetch_ffmpeg():
@@ -214,7 +208,7 @@ def summarize_hour(llm, hr_sect):
             summaries.append(llm.run_llm(prompt))
         else:
             summaries.append(None)
-    summaries = [(x.join() if x is not None else "") for x in summaries]
+    summaries = [(x.join() if x is not None else '') for x in summaries]
     all_sects = '\n'.join(summaries)
     prompt = f'The following is a set of summaries of sections of a video.\n{all_sects}\nTake those summaries of individual sections and distill it into a consolidated summary of the entire video.'
     hr_summary = llm.run_llm(prompt).join()

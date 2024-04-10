@@ -11,7 +11,6 @@ dependencies = [
   "llama_cpp_python@git+https://github.com/Lucius-Q-User/llama-cpp-python.git",
   "requests>=2.31.0",
   "typing_extensions>=4.10.0",
-  "webvtt-py>=0.4.6",
   "yt-dlp>=2024.3.10",
   "ffmpeg-python>=0.2.0",
   "huggingface_hub>=0.22.1",
