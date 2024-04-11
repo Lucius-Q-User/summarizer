@@ -226,7 +226,10 @@ def remove_sponsored(video_id, types, captions):
     url = f'https://sponsor.ajay.app/api/skipSegments?videoID={video_id}'
     for t in types:
         url += f'&category={t}'
-    segments = requests.get(url).json()
+    resp = requests.get(url)
+    if resp.status_code == 404:
+        return captions
+    segments = resp.json()
     return [caption for caption in captions if not caption_in_segments(caption, segments)]
 
 LOCAL_PROVIDER = 'local'
