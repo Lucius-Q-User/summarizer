@@ -215,6 +215,8 @@ def summarize_hour(llm, hr_sect):
         else:
             summaries.append(None)
     summaries = [(x.join() if x is not None else '') for x in summaries]
+    if len(summaries) == 1:
+        return HourSummary(summaries[0], [])
     all_sects = '\n'.join(summaries)
     prompt = f'The following is a set of summaries of sections of a video.\n{all_sects}\nTake those summaries of individual sections and distill it into a consolidated summary of the entire video.'
     hr_summary = llm.run_llm(prompt).join()
