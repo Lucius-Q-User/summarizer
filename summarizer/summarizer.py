@@ -15,7 +15,7 @@ import json
 import time
 import sys
 import shutil
-
+import math
 
 Segment = namedtuple('Segment', ['start', 'end', 'text'])
 HourSummary = namedtuple('HourSummary', ['overall', 'parts'])
@@ -173,7 +173,8 @@ def fetch_ffmpeg():
     os.chmod(ffmpeg, 0o755)
     return ffmpeg
 
-
+AUDIO_RATE = 16000
+N_SAMPLES = AUDIO_RATE * 60 * 5
 def generate_captions(ydl, video_url, tmpdir):
     import numpy as np
     import whisper_cpp
@@ -181,11 +182,16 @@ def generate_captions(ydl, video_url, tmpdir):
 
     ffmpeg_cmd = fetch_ffmpeg()
     ydl.download(video_url)
-    samples, _ = ffmpeg.input(f'{tmpdir}/{AUDIO_FILE}').output('-', format='s16le', acodec='pcm_s16le', ac=1, ar=16000).run(cmd=[ffmpeg_cmd, '-nostdin'], capture_stdout=True, capture_stderr=False)
+    samples, _ = ffmpeg.input(f'{tmpdir}/{AUDIO_FILE}').output('-', format='s16le', acodec='pcm_s16le', ac=1, ar=AUDIO_RATE).run(cmd=[ffmpeg_cmd, '-nostdin'], capture_stdout=True, capture_stderr=False)
     samples = np.frombuffer(samples, np.int16).flatten().astype(np.float32) / 32768.0
     model = huggingface_hub.hf_hub_download('ggerganov/whisper.cpp', WHISPER_MODEL)
     ws = whisper_cpp.Whisper(model, whisper_cpp.WHISPER_AHEADS_BASE_EN)
-    return ws.transcribe(samples)
+    segments = []
+    for i in range(math.ceil(len(samples) / N_SAMPLES)):
+        seg = ws.transcribe(samples[i * N_SAMPLES:(i + 1) * N_SAMPLES])
+        for s in seg:
+            segments.append(Segment(s.start + i * 300, s.end + i * 300, s.text))
+    return segments
 
 def sectionize_captions(captions):
     sections = []
@@ -243,6 +249,7 @@ def main():
     parser.add_argument('video_url')
     parser.add_argument('-lp', '--llm-provider', choices = PROVIDERS.keys(), default = LOCAL_PROVIDER)
     parser.add_argument('-sb', '--sponsorblock', choices = ['sponsor', 'selfpromo', 'interaction', 'intro', 'outro', 'preview', 'music', 'offtopic', 'filler'], action = 'append', default = [])
+    parser.add_argument('--force-local-transcribe', action = 'store_true')
     args = parser.parse_args()
 
     with TemporaryDirectory() as tmpdir:
@@ -253,7 +260,9 @@ def main():
         }
         with YoutubeDL(info) as ydl:
             video_info = ydl.extract_info(args.video_url, download=False)
-            captions = download_captions(video_info)
+            captions = None
+            if not args.force_local_transcribe:
+                captions = download_captions(video_info)
             if captions is None:
                 captions = generate_captions(ydl, args.video_url, tmpdir)
     video_id = video_info['id']
