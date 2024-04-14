@@ -270,6 +270,9 @@ def main():
     video_id = video_info['id']
     captions = remove_sponsored(video_id, args.sponsorblock, captions)
     sections = sectionize_captions(captions)
+    if video_info['duration'] % 300 < 60 and len(sections[-1]) > 1:
+        sections[-1][-2].extend(sections[-1][-1])
+        del sections[-1][-1]
     llm = PROVIDERS[args.llm_provider]()
     summaries = [summarize_hour(llm, x) for x in sections]
 
