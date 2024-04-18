@@ -38,14 +38,7 @@ class LocalLLM(object):
         resp = self.llama.create_chat_completion(messages=[
             {'role': 'user', 'content': prompt}
         ], max_tokens=None)
-        return self.cleanup(resp['choices'][0]['message']['content'])
-    def cleanup(self, st):
-        if len(st) == 0:
-            return st
-        for i, v in enumerate(st):
-            if v.isalnum():
-                break
-        return st[i:]
+        return resp['choices'][0]['message']['content']
 
 class GroqLLM(object):
     def __init__(self):
