@@ -35,8 +35,10 @@ class LocalLLM(object):
              model, n_gpu_layers=-1, n_ctx=32768#, verbose=False
         )
     def run_llm(self, prompt):
-        inst = f'[INST] {prompt} [/INST]'
-        return self.cleanup(self.llama(inst, max_tokens=None)['choices'][0]['text'])
+        resp = self.llama.create_chat_completion(messages=[
+            {'role': 'user', 'content': prompt}
+        ], max_tokens=None)
+        return self.cleanup(resp['choices'][0]['message']['content'])
     def cleanup(self, st):
         if len(st) == 0:
             return st
