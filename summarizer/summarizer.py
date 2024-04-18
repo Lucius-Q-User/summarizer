@@ -10,7 +10,6 @@ import huggingface_hub
 from yt_dlp import YoutubeDL
 from tempfile import TemporaryDirectory
 from argparse import ArgumentParser
-from threading import Thread
 import json
 import time
 import sys
@@ -28,21 +27,6 @@ GROQ_API_KEY_VAR = 'GROQ_API_KEY'
 XDG_CACHE_HOME = 'XDG_CACHE_HOME'
 XDG_CONFIG_HOME = 'XDG_CONFIG_HOME'
 
-class LocalLLMWorker(object):
-    def __init__(self, llm, prompt):
-        self.llm = llm
-        self.prompt = prompt
-    def join(self):
-        inst = f'[INST] {self.prompt} [/INST]'
-        return self.cleanup(self.llm.llama(inst, max_tokens=None)['choices'][0]['text'])
-    def cleanup(self, st):
-        if len(st) == 0:
-            return st
-        for i, v in enumerate(st):
-            if v.isalnum():
-                break
-        return st[i:]
-
 class LocalLLM(object):
     def __init__(self):
         from llama_cpp import Llama
@@ -51,36 +35,15 @@ class LocalLLM(object):
              model, n_gpu_layers=-1, n_ctx=32768#, verbose=False
         )
     def run_llm(self, prompt):
-        return LocalLLMWorker(self, prompt)
-
-class GroqLLMWorker(object):
-    def __init__(self, api_key, prompt):
-        self.api_key = api_key
-        self.prompt = prompt
-        self.thread = Thread(target = self)
-        self.thread.start()
-    def __call__(self):
-        req = {
-            'model': 'mixtral-8x7b-32768',
-            'max_tokens': 32768,
-            'messages': [
-                {'role': 'user','content': self.prompt}
-            ]
-        }
-        headers = {
-            'Authorization': f'Bearer {self.api_key}'
-        }
-        while 1:
-            resp = requests.post('https://api.groq.com/openai/v1/chat/completions', headers = headers, data = json.dumps(req))
-            if resp.status_code == 429:
-                time.sleep(int(resp.headers['retry-after']) + 2)
-                continue
-            self.result = resp.json()['choices'][0]['message']['content']
-            return
-
-    def join(self):
-        self.thread.join()
-        return self.result
+        inst = f'[INST] {prompt} [/INST]'
+        return self.cleanup(self.llama(inst, max_tokens=None)['choices'][0]['text'])
+    def cleanup(self, st):
+        if len(st) == 0:
+            return st
+        for i, v in enumerate(st):
+            if v.isalnum():
+                break
+        return st[i:]
 
 class GroqLLM(object):
     def __init__(self):
@@ -93,7 +56,23 @@ class GroqLLM(object):
                 cfg_dir = f'{os.environ["HOME"]}/.config'
             self.api_key = json.load(open(f'{cfg_dir}/summarize.json'))[GROQ_API_KEY_VAR]
     def run_llm(self, prompt):
-        return GroqLLMWorker(self.api_key, prompt)
+        req = {
+            'model': 'mixtral-8x7b-32768',
+            'max_tokens': 32768,
+            'messages': [
+                {'role': 'user','content': prompt}
+            ]
+        }
+        headers = {
+            'Authorization': f'Bearer {self.api_key}'
+        }
+        while 1:
+            resp = requests.post('https://api.groq.com/openai/v1/chat/completions', headers = headers, data = json.dumps(req))
+            if resp.status_code == 429:
+                time.sleep(int(resp.headers['retry-after']) + 2)
+                continue
+            return resp.json()['choices'][0]['message']['content']
+
 
 def find_json3(fmts):
     for fmt in fmts:
@@ -213,13 +192,12 @@ def summarize_hour(llm, hr_sect):
             prompt = f'The following is a transcript of a section of a video.\n{" ".join(min_sect)}\n Based on the previous transcript, describe what is happening in this section'
             summaries.append(llm.run_llm(prompt))
         else:
-            summaries.append(None)
-    summaries = [(x.join() if x is not None else '') for x in summaries]
+            summaries.append('')
     if len(summaries) == 1:
         return HourSummary(summaries[0], [])
     all_sects = '\n'.join(summaries)
     prompt = f'The following is a set of summaries of sections of a video.\n{all_sects}\nTake those summaries of individual sections and distill it into a consolidated summary of the entire video.'
-    hr_summary = llm.run_llm(prompt).join()
+    hr_summary = llm.run_llm(prompt)
     return HourSummary(hr_summary, summaries)
 
 def caption_in_segment(caption, segment):
