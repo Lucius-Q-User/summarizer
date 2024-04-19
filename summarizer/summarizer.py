@@ -22,17 +22,16 @@ HourSummary = namedtuple('HourSummary', ['overall', 'parts'])
 OUT_DIR = 'out'
 AUDIO_FILE = 'audio.m4a'
 WHISPER_MODEL = 'ggml-base.en.bin'
-MISTRAL_MODEL = 'mistral-7b-instruct-v0.2.Q8_0.gguf'
 GROQ_API_KEY_VAR = 'GROQ_API_KEY'
 XDG_CACHE_HOME = 'XDG_CACHE_HOME'
 XDG_CONFIG_HOME = 'XDG_CONFIG_HOME'
 
 class LocalLLM(object):
-    def __init__(self):
+    def __init__(self, args):
         from llama_cpp import Llama
-        model = huggingface_hub.hf_hub_download('TheBloke/Mistral-7B-Instruct-v0.2-GGUF', MISTRAL_MODEL)
+        model = huggingface_hub.hf_hub_download(args.local_model_repo, args.local_model_file)
         self.llama = Llama(
-             model, n_gpu_layers=-1, n_ctx=32768#, verbose=False
+             model, n_gpu_layers=-1, n_ctx=0#, verbose=False
         )
     def run_llm(self, prompt):
         resp = self.llama.create_chat_completion(messages=[
@@ -41,7 +40,7 @@ class LocalLLM(object):
         return resp['choices'][0]['message']['content']
 
 class GroqLLM(object):
-    def __init__(self):
+    def __init__(self, args):
         if GROQ_API_KEY_VAR in os.environ:
             self.api_key = os.environ[GROQ_API_KEY_VAR]
         else:
@@ -50,9 +49,10 @@ class GroqLLM(object):
             else:
                 cfg_dir = f'{os.environ["HOME"]}/.config'
             self.api_key = json.load(open(f'{cfg_dir}/summarize.json'))[GROQ_API_KEY_VAR]
+        self.model = args.groq_model
     def run_llm(self, prompt):
         req = {
-            'model': 'mixtral-8x7b-32768',
+            'model': self.model,
             'max_tokens': 32768,
             'messages': [
                 {'role': 'user','content': prompt}
@@ -224,6 +224,9 @@ def main():
     parser.add_argument('video_url')
     parser.add_argument('-lp', '--llm-provider', choices = PROVIDERS.keys(), default = LOCAL_PROVIDER)
     parser.add_argument('-sb', '--sponsorblock', choices = ['sponsor', 'selfpromo', 'interaction', 'intro', 'outro', 'preview', 'music', 'offtopic', 'filler'], action = 'append', default = [])
+    parser.add_argument('-lmr', '--local-model-repo', default = 'TheBloke/Mistral-7B-Instruct-v0.2-GGUF')
+    parser.add_argument('-lmf', '--local-model-file', default = 'mistral-7b-instruct-v0.2.Q8_0.gguf')
+    parser.add_argument('-gm', '--groq-model', default = 'mixtral-8x7b-32768')
     parser.add_argument('--force-local-transcribe', action = 'store_true')
     args = parser.parse_args()
 
@@ -246,7 +249,7 @@ def main():
     if video_info['duration'] % 300 < 60 and len(sections[-1]) > 1:
         sections[-1][-2].extend(sections[-1][-1])
         del sections[-1][-1]
-    llm = PROVIDERS[args.llm_provider]()
+    llm = PROVIDERS[args.llm_provider](args)
     summaries = [summarize_hour(llm, x) for x in sections]
 
     env = Environment()
