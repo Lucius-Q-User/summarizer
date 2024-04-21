@@ -9,16 +9,16 @@
 <body>
  <div class="mt-2 container-sm">
   <div class="vstack gap-3">
-   <h1>Summary of <a href="https://youtube.com/watch?v={{video_id}}" target="_blank">{{title}}</a></h1>
+   <h1>Summary of <a href="{{video_url}}" target="_blank">{{title}}</a></h1>
    {% for i, hr_summary in enumerate(summaries) %}
    <section>
-    <h3><a href="https://youtube.com/watch?v={{video_id}}&t={{i * 3600}}" target="_blank">{{"{:02d}".format(i)}}:00:00</a></h3>
+    <h3><a href="{{time_url(video_url, i, 0)}}" target="_blank">{{"{:02d}".format(i)}}:00:00</a></h3>
     <p>{{hr_summary.overall}}</p>
     <ul>
     {% for j, sec in enumerate(hr_summary['parts']) %}
     {% if sec != "" %}
      <li>
-      <strong><a href="https://youtube.com/watch?v={{video_id}}&t={{i * 3600 + j * 300}}" target="_blank">{{"{:02d}".format(i)}}:{{"{:02d}".format(j * 5)}}:00</a></strong>
+      <strong><a href="{{time_url(video_url, i, j)}}" target="_blank">{{"{:02d}".format(i)}}:{{"{:02d}".format(j * 5)}}:00</a></strong>
       {{sec}}
      </li>
     {% endif %}

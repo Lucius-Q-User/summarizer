@@ -18,6 +18,7 @@ import math
 
 Segment = namedtuple('Segment', ['start', 'end', 'text'])
 HourSummary = namedtuple('HourSummary', ['overall', 'parts'])
+TimeUrlFn = namedtuple('TimeUrlFn', ['extractor', 'fn'])
 
 OUT_DIR = 'out'
 AUDIO_FILE = 'audio.m4a'
@@ -213,6 +214,17 @@ def remove_sponsored(video_id, types, captions):
     segments = resp.json()
     return [caption for caption in captions if not caption_in_segments(caption, segments)]
 
+def time_url_yt(url, h, fm):
+    return f'{url}&t={h * 3600 + fm * 300}'
+
+def time_url_twitch(url, h, fm):
+    return f'{url}?t={h}h{fm * 5}m00s'
+
+TIME_URL_FNS = [
+    TimeUrlFn('youtube', time_url_yt),
+    TimeUrlFn('twitch', time_url_twitch)
+]
+
 LOCAL_PROVIDER = 'local'
 PROVIDERS = {
     LOCAL_PROVIDER: LocalLLM,
@@ -244,7 +256,8 @@ def main():
             if captions is None:
                 captions = generate_captions(ydl, args.video_url, tmpdir)
     video_id = video_info['id']
-    captions = remove_sponsored(video_id, args.sponsorblock, captions)
+    if video_info['extractor'].startswith('youtube'):
+        captions = remove_sponsored(video_id, args.sponsorblock, captions)
     sections = sectionize_captions(captions)
     duration = video_info['duration']
     if duration % 300 < 60 and math.ceil(duration % 3600 / 300) == len(sections[-1]):
@@ -259,8 +272,17 @@ def main():
     os.makedirs(OUT_DIR, exist_ok=True)
     title = video_info['title']
     filename = f'{OUT_DIR}/{video_id}.html'
+
+    time_url = lambda x, y, z: x
+    for f in TIME_URL_FNS:
+        if video_info['extractor'].startswith(f.extractor):
+            time_url = f.fn
+            break
     with open(filename, 'w') as out:
-        out.write(templ.render(title=title, video_id=video_id, summaries=summaries, enumerate=enumerate))
+        out.write(templ.render(
+            title=title, summaries=summaries, enumerate=enumerate,
+            video_url=video_info['webpage_url'], time_url=time_url
+        ))
     for opener in ['open', 'xdg-open']:
         if shutil.which(opener) is not None:
             os.execlp(opener, opener, filename)
