@@ -246,7 +246,8 @@ def main():
     video_id = video_info['id']
     captions = remove_sponsored(video_id, args.sponsorblock, captions)
     sections = sectionize_captions(captions)
-    if video_info['duration'] % 300 < 60 and len(sections[-1]) > 1:
+    duration = video_info['duration']
+    if duration % 300 < 60 and math.ceil(duration % 3600 / 300) == len(sections[-1]):
         sections[-1][-2].extend(sections[-1][-1])
         del sections[-1][-1]
     llm = PROVIDERS[args.llm_provider](args)
