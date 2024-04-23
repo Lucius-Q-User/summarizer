@@ -236,9 +236,9 @@ def main():
     parser.add_argument('video_url')
     parser.add_argument('-lp', '--llm-provider', choices = PROVIDERS.keys(), default = LOCAL_PROVIDER)
     parser.add_argument('-sb', '--sponsorblock', choices = ['sponsor', 'selfpromo', 'interaction', 'intro', 'outro', 'preview', 'music', 'offtopic', 'filler'], action = 'append', default = [])
-    parser.add_argument('-lmr', '--local-model-repo', default = 'TheBloke/Mistral-7B-Instruct-v0.2-GGUF')
+    parser.add_argument('-lmr', '--local-model-repo', default = 'bartowski/Meta-Llama-3-8B-Instruct-GGUF')
     parser.add_argument('-lmf', '--local-model-file', default = 'mistral-7b-instruct-v0.2.Q8_0.gguf')
-    parser.add_argument('-gm', '--groq-model', default = 'mixtral-8x7b-32768')
+    parser.add_argument('-gm', '--groq-model', default = 'llama3-8b-8192')
     parser.add_argument('--force-local-transcribe', action = 'store_true')
     args = parser.parse_args()
 
