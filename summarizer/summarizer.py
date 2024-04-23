@@ -168,16 +168,18 @@ def generate_captions(ydl, video_url, tmpdir):
             segments.append(Segment(s.start + i * 300, s.end + i * 300, s.text))
     return segments
 
-def sectionize_captions(captions):
+def sectionize_captions(captions, duration):
     sections = []
+    for i in range(duration // 3600):
+        sections.append([[] for j in range(12)])
+    if duration % 3600 > 0:
+        sections.append([])
+    for i in range(math.ceil(duration % 3600 / 300)):
+        sections[-1].append([])
     for caption in captions:
         hour = caption.start // 3600
         minute = (caption.start % 3600) // 60
-        while len(sections) - 1 < hour:
-            sections.append([])
         hr_sect = sections[hour]
-        while len(hr_sect) - 1 < minute // 5:
-            hr_sect.append([])
         hr_sect[minute // 5].append(caption.text)
     return sections
 
@@ -258,9 +260,13 @@ def main():
     video_id = video_info['id']
     if video_info['extractor'].startswith('youtube'):
         captions = remove_sponsored(video_id, args.sponsorblock, captions)
-    sections = sectionize_captions(captions)
+
     duration = video_info['duration']
-    if duration % 300 < 60 and math.ceil(duration % 3600 / 300) == len(sections[-1]):
+    sections = sectionize_captions(captions, duration)
+    if duration > 3600 and duration % 3600 < 60:
+        sections[-2][-1].extend(sections[-1][0])
+        del sections[-1]
+    elif duration > 300 and duration % 300 < 60:
         sections[-1][-2].extend(sections[-1][-1])
         del sections[-1][-1]
     llm = PROVIDERS[args.llm_provider](args)
