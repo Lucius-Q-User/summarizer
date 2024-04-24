@@ -15,6 +15,7 @@ import time
 import sys
 import shutil
 import math
+from datetime import datetime
 
 Segment = namedtuple('Segment', ['start', 'end', 'text'])
 HourSummary = namedtuple('HourSummary', ['overall', 'parts'])
@@ -39,6 +40,10 @@ class LocalLLM(object):
             {'role': 'user', 'content': prompt}
         ], max_tokens=None)
         return resp['choices'][0]['message']['content']
+    def __enter__(self):
+        return self
+    def __exit__(self, type, value, traceback):
+        pass
 
 class GroqLLM(object):
     def __init__(self, args):
@@ -49,8 +54,10 @@ class GroqLLM(object):
                 cfg_dir = os.environ[XDG_CONFIG_HOME]
             else:
                 cfg_dir = f'{os.environ["HOME"]}/.config'
-            self.api_key = json.load(open(f'{cfg_dir}/summarize.json'))[GROQ_API_KEY_VAR]
+            with open(f'{cfg_dir}/summarize.json') as cfgfile:
+                self.api_key = json.load(cfgfile)[GROQ_API_KEY_VAR]
         self.model = args.groq_model
+        self.tokens_used = 0
     def run_llm(self, prompt):
         req = {
             'model': self.model,
@@ -67,7 +74,15 @@ class GroqLLM(object):
             if resp.status_code == 429:
                 time.sleep(int(resp.headers['retry-after']) + 2)
                 continue
-            return resp.json()['choices'][0]['message']['content']
+            jresp = resp.json()
+            self.tokens_used += jresp['usage']['total_tokens']
+            return jresp['choices'][0]['message']['content']
+    def __enter__(self):
+        return self
+    def __exit__(self, type, value, traceback):
+        alt_path = make_cache_dir()
+        with open(f'{alt_path}/usage.csv', 'a') as usage:
+            usage.write(f'{datetime.now().isoformat()},{self.tokens_used}\n')
 
 
 def find_json3(fmts):
@@ -114,16 +129,20 @@ def download_captions(video_info):
         segments.append(Segment(start // 1000, (start + event.get('dDurationMs', 0)) // 1000, text))
     return segments
 
-def fetch_ffmpeg():
-    ffmpeg = 'ffmpeg'
-    if shutil.which(ffmpeg) is not None:
-        return ffmpeg
+def make_cache_dir():
     if XDG_CACHE_HOME in os.environ:
         cache_path = os.environ[XDG_CACHE_HOME]
     else:
         cache_path = f'{os.environ["HOME"]}/.cache'
     alt_path = f'{cache_path}/summarize'
     os.makedirs(alt_path, exist_ok=True)
+    return alt_path
+
+def fetch_ffmpeg():
+    ffmpeg = 'ffmpeg'
+    if shutil.which(ffmpeg) is not None:
+        return ffmpeg
+    alt_path = make_cache_dir()
     ffmpeg = f'{alt_path}/ffmpeg'
     if os.path.isfile(ffmpeg):
         return ffmpeg
@@ -269,8 +288,8 @@ def main():
     elif duration > 300 and duration % 300 < 60:
         sections[-1][-2].extend(sections[-1][-1])
         del sections[-1][-1]
-    llm = PROVIDERS[args.llm_provider](args)
-    summaries = [summarize_hour(llm, x) for x in sections]
+    with PROVIDERS[args.llm_provider](args) as llm:
+        summaries = [summarize_hour(llm, x) for x in sections]
 
     env = Environment()
     template_path = f'{os.path.dirname(__file__)}/template.j'
