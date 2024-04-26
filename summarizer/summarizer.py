@@ -1,8 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import requests
-from io import StringIO, BytesIO
-import urllib.parse as parse
+from io import BytesIO
 import os
 from jinja2 import Environment
 from collections import namedtuple
@@ -23,7 +22,7 @@ TimeUrlFn = namedtuple('TimeUrlFn', ['extractor', 'fn'])
 
 OUT_DIR = 'out'
 AUDIO_FILE = 'audio.m4a'
-WHISPER_MODEL = 'ggml-base.en.bin'
+WHISPER_DEFAULT = 'base.en'
 GROQ_API_KEY_VAR = 'GROQ_API_KEY'
 XDG_CACHE_HOME = 'XDG_CACHE_HOME'
 XDG_CONFIG_HOME = 'XDG_CONFIG_HOME'
@@ -169,7 +168,7 @@ def fetch_ffmpeg():
 
 AUDIO_RATE = 16000
 N_SAMPLES = AUDIO_RATE * 60 * 5
-def generate_captions(ydl, video_url, tmpdir):
+def generate_captions(ydl, video_url, tmpdir, model_name):
     import numpy as np
     import whisper_cpp
     import ffmpeg
@@ -178,8 +177,9 @@ def generate_captions(ydl, video_url, tmpdir):
     ydl.download(video_url)
     samples, _ = ffmpeg.input(f'{tmpdir}/{AUDIO_FILE}').output('-', format='s16le', acodec='pcm_s16le', ac=1, ar=AUDIO_RATE).run(cmd=[ffmpeg_cmd, '-nostdin'], capture_stdout=True, capture_stderr=False)
     samples = np.frombuffer(samples, np.int16).flatten().astype(np.float32) / 32768.0
-    model = huggingface_hub.hf_hub_download('ggerganov/whisper.cpp', WHISPER_MODEL)
-    ws = whisper_cpp.Whisper(model, whisper_cpp.WHISPER_AHEADS_BASE_EN)
+    aheads_name = model_name.replace('.', '_').replace('-', '_').upper()
+    model = huggingface_hub.hf_hub_download('ggerganov/whisper.cpp', f'ggml-{model_name}.bin')
+    ws = whisper_cpp.Whisper(model, getattr(whisper_cpp, f'WHISPER_AHEADS_{aheads_name}'))
     segments = []
     for i in range(math.ceil(len(samples) / N_SAMPLES)):
         seg = ws.transcribe(samples[i * N_SAMPLES:(i + 1) * N_SAMPLES])
@@ -260,6 +260,7 @@ def main():
     parser.add_argument('-lmr', '--local-model-repo', default = 'bartowski/Meta-Llama-3-8B-Instruct-GGUF')
     parser.add_argument('-lmf', '--local-model-file', default = 'mistral-7b-instruct-v0.2.Q8_0.gguf')
     parser.add_argument('-gm', '--groq-model', default = 'llama3-8b-8192')
+    parser.add_argument('-wm', '--whisper-model', choices = ['tiny', 'tiny.en', 'base', WHISPER_DEFAULT, 'small', 'small.en', 'medium', 'medium.en', 'large-v1', 'large-v2', 'large-v3'], default = WHISPER_DEFAULT)
     parser.add_argument('--force-local-transcribe', action = 'store_true')
     args = parser.parse_args()
 
@@ -275,7 +276,7 @@ def main():
             if not args.force_local_transcribe:
                 captions = download_captions(video_info)
             if captions is None:
-                captions = generate_captions(ydl, args.video_url, tmpdir)
+                captions = generate_captions(ydl, args.video_url, tmpdir, args.whisper_model)
     video_id = video_info['id']
     if video_info['extractor'].startswith('youtube'):
         captions = remove_sponsored(video_id, args.sponsorblock, captions)
