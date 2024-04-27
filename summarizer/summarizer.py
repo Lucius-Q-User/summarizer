@@ -44,8 +44,9 @@ class LocalLLM(object):
     def __exit__(self, type, value, traceback):
         pass
 
-class GroqLLM(object):
+class OpenaiLLM(object):
     def __init__(self, args):
+        self.api_key = None
         if GROQ_API_KEY_VAR in os.environ:
             self.api_key = os.environ[GROQ_API_KEY_VAR]
         else:
@@ -53,10 +54,14 @@ class GroqLLM(object):
                 cfg_dir = os.environ[XDG_CONFIG_HOME]
             else:
                 cfg_dir = f'{os.environ["HOME"]}/.config'
-            with open(f'{cfg_dir}/summarize.json') as cfgfile:
-                self.api_key = json.load(cfgfile)[GROQ_API_KEY_VAR]
-        self.model = args.groq_model
+            try:
+                with open(f'{cfg_dir}/summarize.json') as cfgfile:
+                    self.api_key = json.load(cfgfile)[GROQ_API_KEY_VAR]
+            except (FileNotFoundError, KeyError):
+                pass
+        self.model = args.openai_model
         self.tokens_used = 0
+        self.base_url = args.openai_base_url
     def run_llm(self, prompt):
         req = {
             'model': self.model,
@@ -66,10 +71,12 @@ class GroqLLM(object):
             ]
         }
         headers = {
-            'Authorization': f'Bearer {self.api_key}'
+            'Content-Type': 'application/json'
         }
+        if self.api_key is not None:
+            headers['Authorization'] = f'Bearer {self.api_key}'
         while 1:
-            resp = requests.post('https://api.groq.com/openai/v1/chat/completions', headers = headers, data = json.dumps(req))
+            resp = requests.post(f'{self.base_url}/chat/completions', headers = headers, data = json.dumps(req))
             if resp.status_code == 429:
                 time.sleep(int(resp.headers['retry-after']) + 2)
                 continue
@@ -249,7 +256,8 @@ TIME_URL_FNS = [
 LOCAL_PROVIDER = 'local'
 PROVIDERS = {
     LOCAL_PROVIDER: LocalLLM,
-    'groq': GroqLLM
+    'openai': OpenaiLLM,
+    'groq': OpenaiLLM,
 }
 
 def main():
@@ -259,7 +267,8 @@ def main():
     parser.add_argument('-sb', '--sponsorblock', choices = ['sponsor', 'selfpromo', 'interaction', 'intro', 'outro', 'preview', 'music', 'offtopic', 'filler'], action = 'append', default = [])
     parser.add_argument('-lmr', '--local-model-repo', default = 'bartowski/Meta-Llama-3-8B-Instruct-GGUF')
     parser.add_argument('-lmf', '--local-model-file', default = 'mistral-7b-instruct-v0.2.Q8_0.gguf')
-    parser.add_argument('-gm', '--groq-model', default = 'llama3-8b-8192')
+    parser.add_argument('-om', '-gm', '--openai-model', '--groq-model', default = 'llama3-8b-8192')
+    parser.add_argument('-ou', '--openai-base-url', default = 'https://api.groq.com/openai/v1')
     parser.add_argument('-wm', '--whisper-model', choices = ['tiny', 'tiny.en', 'base', WHISPER_DEFAULT, 'small', 'small.en', 'medium', 'medium.en', 'large-v1', 'large-v2', 'large-v3'], default = WHISPER_DEFAULT)
     parser.add_argument('--force-local-transcribe', action = 'store_true')
     args = parser.parse_args()
