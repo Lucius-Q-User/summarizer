@@ -44,6 +44,17 @@ class LocalLLM(object):
     def __exit__(self, type, value, traceback):
         pass
 
+class ChatgptLLM(object):
+    def __init__(self, args):
+        pass
+    def run_llm(self, prompt):
+        from . import chatgpt
+        return chatgpt.send_request(prompt)
+    def __enter__(self):
+        return self
+    def __exit__(self, type, value, traceback):
+        pass
+
 class OpenaiLLM(object):
     def __init__(self, args):
         self.api_key = None
@@ -258,6 +269,7 @@ PROVIDERS = {
     LOCAL_PROVIDER: LocalLLM,
     'openai': OpenaiLLM,
     'groq': OpenaiLLM,
+    'chatgpt': ChatgptLLM
 }
 
 def main():
