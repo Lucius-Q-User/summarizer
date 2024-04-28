@@ -278,7 +278,7 @@ def main():
     parser.add_argument('-lp', '--llm-provider', choices = PROVIDERS.keys(), default = LOCAL_PROVIDER)
     parser.add_argument('-sb', '--sponsorblock', choices = ['sponsor', 'selfpromo', 'interaction', 'intro', 'outro', 'preview', 'music', 'offtopic', 'filler'], action = 'append', default = [])
     parser.add_argument('-lmr', '--local-model-repo', default = 'bartowski/Meta-Llama-3-8B-Instruct-GGUF')
-    parser.add_argument('-lmf', '--local-model-file', default = 'mistral-7b-instruct-v0.2.Q8_0.gguf')
+    parser.add_argument('-lmf', '--local-model-file', default = 'Meta-Llama-3-8B-Instruct-Q8_0.gguf')
     parser.add_argument('-om', '-gm', '--openai-model', '--groq-model', default = 'llama3-8b-8192')
     parser.add_argument('-ou', '--openai-base-url', default = 'https://api.groq.com/openai/v1')
     parser.add_argument('-wm', '--whisper-model', choices = ['tiny', 'tiny.en', 'base', WHISPER_DEFAULT, 'small', 'small.en', 'medium', 'medium.en', 'large-v1', 'large-v2', 'large-v3'], default = WHISPER_DEFAULT)
