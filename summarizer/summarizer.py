@@ -57,19 +57,7 @@ class ChatgptLLM(object):
 
 class OpenaiLLM(object):
     def __init__(self, args):
-        self.api_key = None
-        if GROQ_API_KEY_VAR in os.environ:
-            self.api_key = os.environ[GROQ_API_KEY_VAR]
-        else:
-            if XDG_CONFIG_HOME in os.environ:
-                cfg_dir = os.environ[XDG_CONFIG_HOME]
-            else:
-                cfg_dir = f'{os.environ["HOME"]}/.config'
-            try:
-                with open(f'{cfg_dir}/summarize.json') as cfgfile:
-                    self.api_key = json.load(cfgfile)[GROQ_API_KEY_VAR]
-            except (FileNotFoundError, KeyError):
-                pass
+        self.api_key = args.api_key
         self.model = args.openai_model
         self.tokens_used = 0
         self.base_url = args.openai_base_url
@@ -272,18 +260,39 @@ PROVIDERS = {
     'chatgpt': ChatgptLLM
 }
 
+def load_config():
+    if XDG_CONFIG_HOME in os.environ:
+        cfg_dir = os.environ[XDG_CONFIG_HOME]
+    else:
+        cfg_dir = f'{os.environ["HOME"]}/.config'
+    try:
+        with open(f'{cfg_dir}/summarize.json') as cfgfile:
+            return json.load(cfgfile)
+    except FileNotFoundError:
+        return {}
+
 def main():
+    config = load_config()
     parser = ArgumentParser(prog='summarize')
     parser.add_argument('video_url')
-    parser.add_argument('-lp', '--llm-provider', choices = PROVIDERS.keys(), default = LOCAL_PROVIDER)
-    parser.add_argument('-sb', '--sponsorblock', choices = ['sponsor', 'selfpromo', 'interaction', 'intro', 'outro', 'preview', 'music', 'offtopic', 'filler'], action = 'append', default = [])
-    parser.add_argument('-lmr', '--local-model-repo', default = 'bartowski/Meta-Llama-3-8B-Instruct-GGUF')
-    parser.add_argument('-lmf', '--local-model-file', default = 'Meta-Llama-3-8B-Instruct-Q8_0.gguf')
-    parser.add_argument('-om', '-gm', '--openai-model', '--groq-model', default = 'llama3-8b-8192')
-    parser.add_argument('-ou', '--openai-base-url', default = 'https://api.groq.com/openai/v1')
-    parser.add_argument('-wm', '--whisper-model', choices = ['tiny', 'tiny.en', 'base', WHISPER_DEFAULT, 'small', 'small.en', 'medium', 'medium.en', 'large-v1', 'large-v2', 'large-v3'], default = WHISPER_DEFAULT)
+    parser.add_argument('-lp', '--llm-provider', choices = PROVIDERS.keys(), default = config.get('llm_provider', LOCAL_PROVIDER))
+    parser.add_argument('-sb', '--sponsorblock',
+                        choices = ['sponsor', 'selfpromo', 'interaction', 'intro', 'outro', 'preview', 'music', 'offtopic', 'filler'],
+                        action = 'append', default = config.get('sponsorblock', []))
+    parser.add_argument('-lmr', '--local-model-repo', default = config.get('local_model_repo', 'bartowski/Meta-Llama-3-8B-Instruct-GGUF'))
+    parser.add_argument('-lmf', '--local-model-file', default = config.get('local_model_file', 'Meta-Llama-3-8B-Instruct-Q8_0.gguf'))
+    parser.add_argument('-om', '-gm', '--openai-model', '--groq-model', default = config.get('openai_model', 'llama3-8b-8192'))
+    parser.add_argument('-ou', '--openai-base-url', default = config.get('openai_base_url', 'https://api.groq.com/openai/v1'))
+    parser.add_argument('-wm', '--whisper-model',
+                        choices = ['tiny', 'tiny.en', 'base', WHISPER_DEFAULT, 'small', 'small.en', 'medium', 'medium.en', 'large-v1', 'large-v2', 'large-v3'],
+                        default = config.get('whisper_model', WHISPER_DEFAULT))
     parser.add_argument('--force-local-transcribe', action = 'store_true')
     args = parser.parse_args()
+    api_key = config.get(GROQ_API_KEY_VAR, None)
+    api_key = config.get('openai_api_key', api_key)
+    api_key = os.environ.get(GROQ_API_KEY_VAR, api_key)
+    api_key = os.environ.get('OPENAI_API_KEY', api_key)
+    args.api_key = api_key
 
     with TemporaryDirectory() as tmpdir:
         info = {

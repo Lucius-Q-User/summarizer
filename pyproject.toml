@@ -16,6 +16,9 @@ dependencies = [
   "whisper_cpp_python@git+https://github.com/Lucius-Q-User/whisper-cpp-python"
 ]
 
+[tool.setuptools]
+packages = ["summarizer"]
+
 [project.scripts]
 summarize = "summarizer:main"
 
