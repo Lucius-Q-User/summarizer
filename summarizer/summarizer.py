@@ -44,6 +44,26 @@ class LocalLLM(object):
     def __exit__(self, type, value, traceback):
         pass
 
+class MetaaiLLM(object):
+    def __init__(self, args):
+        self.proxy = args.meta_proxy
+        self.reinitialize()
+    def reinitialize(self):
+        from .meta import MetaSession
+        self.session = MetaSession(self.proxy)
+    def run_llm(self, prompt):
+        for i in range(3):
+            try:
+                convo = self.session.new_conversation()
+                return self.session.send_message(convo, prompt)
+            except Exception:
+                self.reinitialize()
+        raise Exception('Max retries exceeded')
+    def __enter__(self):
+        return self
+    def __exit__(self, type, value, traceback):
+        pass
+
 class ChatgptLLM(object):
     def __init__(self, args):
         pass
@@ -257,7 +277,8 @@ PROVIDERS = {
     LOCAL_PROVIDER: LocalLLM,
     'openai': OpenaiLLM,
     'groq': OpenaiLLM,
-    'chatgpt': ChatgptLLM
+    'chatgpt': ChatgptLLM,
+    'meta': MetaaiLLM
 }
 
 def load_config():
@@ -286,6 +307,7 @@ def main():
     parser.add_argument('-wm', '--whisper-model',
                         choices = ['tiny', 'tiny.en', 'base', WHISPER_DEFAULT, 'small', 'small.en', 'medium', 'medium.en', 'large-v1', 'large-v2', 'large-v3'],
                         default = config.get('whisper_model', WHISPER_DEFAULT))
+    parser.add_argument('-mp', '--meta-proxy', default = config.get('meta_proxy', None))
     parser.add_argument('--force-local-transcribe', action = 'store_true')
     args = parser.parse_args()
     api_key = config.get(GROQ_API_KEY_VAR, None)
