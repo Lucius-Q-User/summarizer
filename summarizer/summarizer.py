@@ -8,7 +8,6 @@ from collections import namedtuple
 import huggingface_hub
 from yt_dlp import YoutubeDL
 from tempfile import TemporaryDirectory
-from argparse import ArgumentParser
 import json
 import time
 import sys
@@ -19,18 +18,20 @@ from datetime import datetime
 Segment = namedtuple('Segment', ['start', 'end', 'text'])
 HourSummary = namedtuple('HourSummary', ['overall', 'parts'])
 TimeUrlFn = namedtuple('TimeUrlFn', ['extractor', 'fn'])
+ProcessResult = namedtuple('ProcessResult', ['video_id', 'summary'])
 
-OUT_DIR = 'out'
 AUDIO_FILE = 'audio.m4a'
 WHISPER_DEFAULT = 'base.en'
-GROQ_API_KEY_VAR = 'GROQ_API_KEY'
 XDG_CACHE_HOME = 'XDG_CACHE_HOME'
 XDG_CONFIG_HOME = 'XDG_CONFIG_HOME'
 
 class LocalLLM(object):
-    def __init__(self, args):
+    def __init__(self,
+                 local_model_repo = 'bartowski/Meta-Llama-3-8B-Instruct-GGUF',
+                 local_model_file = 'Meta-Llama-3-8B-Instruct-Q8_0.gguf',
+                 **kwargs):
         from llama_cpp import Llama
-        model = huggingface_hub.hf_hub_download(args.local_model_repo, args.local_model_file)
+        model = huggingface_hub.hf_hub_download(local_model_repo, local_model_file)
         self.llama = Llama(
              model, n_gpu_layers=-1, n_ctx=0#, verbose=False
         )
@@ -39,14 +40,12 @@ class LocalLLM(object):
             {'role': 'user', 'content': prompt}
         ], max_tokens=None)
         return resp['choices'][0]['message']['content']
-    def __enter__(self):
-        return self
-    def __exit__(self, type, value, traceback):
+    def save_statitstics(self):
         pass
 
 class MetaaiLLM(object):
-    def __init__(self, args):
-        self.proxy = args.meta_proxy
+    def __init__(self, meta_proxy = None, **kwargs):
+        self.proxy = meta_proxy
         self.reinitialize()
     def reinitialize(self):
         from .meta import MetaSession
@@ -59,28 +58,27 @@ class MetaaiLLM(object):
             except Exception:
                 self.reinitialize()
         raise Exception('Max retries exceeded')
-    def __enter__(self):
-        return self
-    def __exit__(self, type, value, traceback):
+    def save_statitstics(self):
         pass
 
 class ChatgptLLM(object):
-    def __init__(self, args):
+    def __init__(self, **kwargs):
         pass
     def run_llm(self, prompt):
         from . import chatgpt
         return chatgpt.send_request(prompt)
-    def __enter__(self):
-        return self
-    def __exit__(self, type, value, traceback):
+    def save_statitstics(self):
         pass
 
 class OpenaiLLM(object):
-    def __init__(self, args):
-        self.api_key = args.api_key
-        self.model = args.openai_model
+    def __init__(self, openai_api_key,
+                 openai_model = 'llama3-8b-8192',
+                 openai_base_url = 'https://api.groq.com/openai/v1',
+                 **kwargs):
+        self.api_key = openai_api_key
+        self.model = openai_model
         self.tokens_used = 0
-        self.base_url = args.openai_base_url
+        self.base_url = openai_base_url
     def run_llm(self, prompt):
         req = {
             'model': self.model,
@@ -102,9 +100,7 @@ class OpenaiLLM(object):
             jresp = resp.json()
             self.tokens_used += jresp['usage']['total_tokens']
             return jresp['choices'][0]['message']['content']
-    def __enter__(self):
-        return self
-    def __exit__(self, type, value, traceback):
+    def save_statitstics(self):
         alt_path = make_cache_dir()
         with open(f'{alt_path}/usage.csv', 'a') as usage:
             usage.write(f'{datetime.now().isoformat()},{self.tokens_used}\n')
@@ -292,30 +288,12 @@ def load_config():
     except FileNotFoundError:
         return {}
 
-def main():
-    config = load_config()
-    parser = ArgumentParser(prog='summarize')
-    parser.add_argument('video_url')
-    parser.add_argument('-lp', '--llm-provider', choices = PROVIDERS.keys(), default = config.get('llm_provider', LOCAL_PROVIDER))
-    parser.add_argument('-sb', '--sponsorblock',
-                        choices = ['sponsor', 'selfpromo', 'interaction', 'intro', 'outro', 'preview', 'music', 'offtopic', 'filler'],
-                        action = 'append', default = config.get('sponsorblock', []))
-    parser.add_argument('-lmr', '--local-model-repo', default = config.get('local_model_repo', 'bartowski/Meta-Llama-3-8B-Instruct-GGUF'))
-    parser.add_argument('-lmf', '--local-model-file', default = config.get('local_model_file', 'Meta-Llama-3-8B-Instruct-Q8_0.gguf'))
-    parser.add_argument('-om', '-gm', '--openai-model', '--groq-model', default = config.get('openai_model', 'llama3-8b-8192'))
-    parser.add_argument('-ou', '--openai-base-url', default = config.get('openai_base_url', 'https://api.groq.com/openai/v1'))
-    parser.add_argument('-wm', '--whisper-model',
-                        choices = ['tiny', 'tiny.en', 'base', WHISPER_DEFAULT, 'small', 'small.en', 'medium', 'medium.en', 'large-v1', 'large-v2', 'large-v3'],
-                        default = config.get('whisper_model', WHISPER_DEFAULT))
-    parser.add_argument('-mp', '--meta-proxy', default = config.get('meta_proxy', None))
-    parser.add_argument('--force-local-transcribe', action = 'store_true')
-    args = parser.parse_args()
-    api_key = config.get(GROQ_API_KEY_VAR, None)
-    api_key = config.get('openai_api_key', api_key)
-    api_key = os.environ.get(GROQ_API_KEY_VAR, api_key)
-    api_key = os.environ.get('OPENAI_API_KEY', api_key)
-    args.api_key = api_key
-
+def process_video(video_url, *,
+                  llm_provider = LOCAL_PROVIDER,
+                  sponsorblock = [],
+                  whisper_model = WHISPER_DEFAULT,
+                  force_local_transcribe = False,
+                  **kwargs):
     with TemporaryDirectory() as tmpdir:
         info = {
             'format': 'm4a/bestaudio/best',
@@ -323,15 +301,15 @@ def main():
             'outtmpl': {'default': AUDIO_FILE}
         }
         with YoutubeDL(info) as ydl:
-            video_info = ydl.extract_info(args.video_url, download=False)
+            video_info = ydl.extract_info(video_url, download=False)
             captions = None
-            if not args.force_local_transcribe:
+            if not force_local_transcribe:
                 captions = download_captions(video_info)
             if captions is None:
-                captions = generate_captions(ydl, args.video_url, tmpdir, args.whisper_model)
+                captions = generate_captions(ydl, video_url, tmpdir, whisper_model)
     video_id = video_info['id']
     if video_info['extractor'].startswith('youtube'):
-        captions = remove_sponsored(video_id, args.sponsorblock, captions)
+        captions = remove_sponsored(video_id, sponsorblock, captions)
 
     duration = video_info['duration']
     sections = sectionize_captions(captions, duration)
@@ -341,31 +319,22 @@ def main():
     elif duration > 300 and duration % 300 < 60:
         sections[-1][-2].extend(sections[-1][-1])
         del sections[-1][-1]
-    with PROVIDERS[args.llm_provider](args) as llm:
-        summaries = [summarize_hour(llm, x) for x in sections]
+    llm = PROVIDERS[llm_provider](**kwargs)
+    summaries = [summarize_hour(llm, x) for x in sections]
+    llm.save_statitstics()
 
     env = Environment()
     template_path = f'{os.path.dirname(__file__)}/template.j'
     templ = env.from_string(open(template_path).read())
-    os.makedirs(OUT_DIR, exist_ok=True)
     title = video_info['title']
-    filename = f'{OUT_DIR}/{video_id}.html'
 
     time_url = lambda x, y, z: x
     for f in TIME_URL_FNS:
         if video_info['extractor'].startswith(f.extractor):
             time_url = f.fn
             break
-    with open(filename, 'w') as out:
-        out.write(templ.render(
-            title=title, summaries=summaries, enumerate=enumerate,
-            video_url=video_info['webpage_url'], time_url=time_url
-        ))
-    for opener in ['open', 'xdg-open']:
-        if shutil.which(opener) is not None:
-            os.execlp(opener, opener, filename)
-            return
-    print(f'Unable to open the file automatically, the output was written to {filename}')
-
-if __name__ == '__main__':
-    main()
+    summary = templ.render(
+        title=title, summaries=summaries, enumerate=enumerate,
+        video_url=video_info['webpage_url'], time_url=time_url
+    )
+    return ProcessResult(video_id, summary)

@@ -20,7 +20,7 @@ dependencies = [
 packages = ["summarizer"]
 
 [project.scripts]
-summarize = "summarizer:main"
+summarize = "summarizer:cli_main"
 
 [tool.setuptools.package-data]
 summarizer = ["*.j"]
