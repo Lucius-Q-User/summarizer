@@ -190,21 +190,35 @@ def fetch_ffmpeg():
 
 AUDIO_RATE = 16000
 N_SAMPLES = AUDIO_RATE * 60 * 5
+def decode_audio(tmpdir):
+    import subprocess
+    ffmpeg_cmd = fetch_ffmpeg()
+    args = [ffmpeg_cmd, '-nostdin', '-i', f'{tmpdir}/{AUDIO_FILE}', '-f', 's16le', '-ac', '1', '-acodec', 'pcm_s16le', '-ar', f'{AUDIO_RATE}', '-']
+    ffmpeg = subprocess.Popen(args, stdin = subprocess.DEVNULL, stdout = subprocess.PIPE)
+    to_read = N_SAMPLES * 2
+    data = []
+    while ffmpeg.poll() is None:
+        buf = ffmpeg.stdout.read(to_read)
+        data.append(buf)
+        to_read -= len(buf)
+        if to_read == 0:
+            yield b''.join(data)
+            to_read = N_SAMPLES * 2
+            data = []
+    if len(data) != 0:
+        yield b''.join(data)
+
 def generate_captions(ydl, video_url, tmpdir, model_name):
     import numpy as np
     import whisper_cpp
-    import ffmpeg
-
-    ffmpeg_cmd = fetch_ffmpeg()
     ydl.download(video_url)
-    samples, _ = ffmpeg.input(f'{tmpdir}/{AUDIO_FILE}').output('-', format='s16le', acodec='pcm_s16le', ac=1, ar=AUDIO_RATE).run(cmd=[ffmpeg_cmd, '-nostdin'], capture_stdout=True, capture_stderr=False)
-    samples = np.frombuffer(samples, np.int16).flatten().astype(np.float32) / 32768.0
     aheads_name = model_name.replace('.', '_').replace('-', '_').upper()
     model = huggingface_hub.hf_hub_download('ggerganov/whisper.cpp', f'ggml-{model_name}.bin')
     ws = whisper_cpp.Whisper(model, getattr(whisper_cpp, f'WHISPER_AHEADS_{aheads_name}'))
     segments = []
-    for i in range(math.ceil(len(samples) / N_SAMPLES)):
-        seg = ws.transcribe(samples[i * N_SAMPLES:(i + 1) * N_SAMPLES])
+    for i, chunk in enumerate(decode_audio(tmpdir)):
+        samples = np.frombuffer(chunk, np.int16).flatten().astype(np.float32) / 32768.0
+        seg = ws.transcribe(samples)
         for s in seg:
             segments.append(Segment(s.start + i * 300, s.end + i * 300, s.text))
     return segments
