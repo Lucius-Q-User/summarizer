@@ -29,11 +29,12 @@ class LocalLLM(object):
     def __init__(self,
                  local_model_repo = 'bartowski/Meta-Llama-3-8B-Instruct-GGUF',
                  local_model_file = 'Meta-Llama-3-8B-Instruct-Q8_0.gguf',
+                 verbose = False,
                  **kwargs):
         from llama_cpp import Llama
         model = huggingface_hub.hf_hub_download(local_model_repo, local_model_file)
         self.llama = Llama(
-             model, n_gpu_layers=-1, n_ctx=0#, verbose=False
+             model, n_gpu_layers=-1, n_ctx=0, verbose=verbose
         )
     def run_llm(self, prompt):
         resp = self.llama.create_chat_completion(messages=[
@@ -190,11 +191,14 @@ def fetch_ffmpeg():
 
 AUDIO_RATE = 16000
 N_SAMPLES = AUDIO_RATE * 60 * 5
-def decode_audio(tmpdir):
+def decode_audio(tmpdir, verbose):
     import subprocess
     ffmpeg_cmd = fetch_ffmpeg()
     args = [ffmpeg_cmd, '-nostdin', '-i', f'{tmpdir}/{AUDIO_FILE}', '-f', 's16le', '-ac', '1', '-acodec', 'pcm_s16le', '-ar', f'{AUDIO_RATE}', '-']
-    ffmpeg = subprocess.Popen(args, stdin = subprocess.DEVNULL, stdout = subprocess.PIPE)
+    stderr = subprocess.PIPE
+    if not verbose:
+        stderr = subprocess.DEVNULL
+    ffmpeg = subprocess.Popen(args, stdin = subprocess.DEVNULL, stdout = subprocess.PIPE, stderr = stderr)
     to_read = N_SAMPLES * 2
     data = []
     while ffmpeg.poll() is None:
@@ -208,19 +212,23 @@ def decode_audio(tmpdir):
     if len(data) != 0:
         yield b''.join(data)
 
-def generate_captions(ydl, video_url, tmpdir, model_name):
+def generate_captions(progress_hooks, duration, ydl, video_url, tmpdir, model_name, verbose):
     import numpy as np
     import whisper_cpp
+
+    progress_hooks.phase(2, 'Downloading audio track')
     ydl.download(video_url)
     aheads_name = model_name.replace('.', '_').replace('-', '_').upper()
     model = huggingface_hub.hf_hub_download('ggerganov/whisper.cpp', f'ggml-{model_name}.bin')
-    ws = whisper_cpp.Whisper(model, getattr(whisper_cpp, f'WHISPER_AHEADS_{aheads_name}'))
+    ws = whisper_cpp.Whisper(model, getattr(whisper_cpp, f'WHISPER_AHEADS_{aheads_name}'), verbose)
+    progress_hooks.phase(3, 'Generating transcript', math.ceil(duration / 300))
     segments = []
-    for i, chunk in enumerate(decode_audio(tmpdir)):
+    for i, chunk in enumerate(decode_audio(tmpdir, verbose)):
         samples = np.frombuffer(chunk, np.int16).flatten().astype(np.float32) / 32768.0
         seg = ws.transcribe(samples)
         for s in seg:
             segments.append(Segment(s.start + i * 300, s.end + i * 300, s.text))
+        progress_hooks.subphase_step()
     return segments
 
 def sectionize_captions(captions, duration):
@@ -238,7 +246,7 @@ def sectionize_captions(captions, duration):
         hr_sect[minute // 5].append(caption.text)
     return sections
 
-def summarize_hour(llm, hr_sect):
+def summarize_hour(progress_hooks, llm, hr_sect):
     summaries = []
     for min_sect in hr_sect:
         if len(min_sect) != 0:
@@ -246,11 +254,13 @@ def summarize_hour(llm, hr_sect):
             summaries.append(llm.run_llm(prompt))
         else:
             summaries.append('')
+        progress_hooks.subphase_step()
     if len(summaries) == 1:
         return HourSummary(summaries[0], [])
     all_sects = '\n'.join(summaries)
     prompt = f'The following is a set of summaries of sections of a video.\n{all_sects}\nTake those summaries of individual sections and distill it into a consolidated summary of the entire video.'
     hr_summary = llm.run_llm(prompt)
+    progress_hooks.subphase_step()
     return HourSummary(hr_summary, summaries)
 
 def caption_in_segment(caption, segment):
@@ -302,30 +312,54 @@ def load_config():
     except FileNotFoundError:
         return {}
 
-def process_video(video_url, *,
+def ydl_progress(d, progress_hooks):
+    if d['status'] not in ['downloading', 'finished']:
+        return
+    total = d.get('total_bytes', d.get('total_bytes_estimate', 0))
+    if total != 0:
+        progress_hooks.set_substeps(total)
+    progress_hooks.subphase_step(d['downloaded_bytes'])
+
+class YdlLogger(object):
+    def debug(self, msg):
+        pass
+    def info(self, msg):
+        pass
+    def warning(self, msg):
+        pass
+    def error(self, msg):
+        pass
+
+def process_video(progress_hooks, video_url, *,
                   llm_provider = LOCAL_PROVIDER,
                   sponsorblock = [],
                   whisper_model = WHISPER_DEFAULT,
                   force_local_transcribe = False,
+                  verbose = False,
                   **kwargs):
     with TemporaryDirectory() as tmpdir:
         info = {
             'format': 'm4a/bestaudio/best',
             'paths': {'temp': tmpdir, 'home': tmpdir},
-            'outtmpl': {'default': AUDIO_FILE}
+            'outtmpl': {'default': AUDIO_FILE},
+            'progress_hooks': [lambda d: ydl_progress(d, progress_hooks)]
         }
+        if not verbose:
+            info['logger'] = YdlLogger()
         with YoutubeDL(info) as ydl:
+            progress_hooks.phase(0, 'Getting video info')
             video_info = ydl.extract_info(video_url, download=False)
+            duration = video_info['duration']
             captions = None
             if not force_local_transcribe:
+                progress_hooks.phase(1, 'Downloading captions')
                 captions = download_captions(video_info)
             if captions is None:
-                captions = generate_captions(ydl, video_url, tmpdir, whisper_model)
+                captions = generate_captions(progress_hooks, duration, ydl, video_url, tmpdir, whisper_model, verbose)
     video_id = video_info['id']
     if video_info['extractor'].startswith('youtube'):
         captions = remove_sponsored(video_id, sponsorblock, captions)
 
-    duration = video_info['duration']
     sections = sectionize_captions(captions, duration)
     if duration > 3600 and duration % 3600 < 60:
         sections[-2][-1].extend(sections[-1][0])
@@ -333,8 +367,10 @@ def process_video(video_url, *,
     elif duration > 300 and duration % 300 < 60:
         sections[-1][-2].extend(sections[-1][-1])
         del sections[-1][-1]
-    llm = PROVIDERS[llm_provider](**kwargs)
-    summaries = [summarize_hour(llm, x) for x in sections]
+    llm_runs = sum(len(x) for x in sections) + len(sections)
+    progress_hooks.phase(4, 'Generating summaries', llm_runs)
+    llm = PROVIDERS[llm_provider](verbose = verbose, **kwargs)
+    summaries = [summarize_hour(progress_hooks, llm, x) for x in sections]
     llm.save_statitstics()
 
     env = Environment()
