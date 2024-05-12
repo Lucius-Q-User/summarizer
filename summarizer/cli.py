@@ -11,10 +11,10 @@ GROQ_API_KEY_VAR = 'GROQ_API_KEY'
 
 class ProgressHooks(object):
     def __init__(self):
-        self.top_bar = tqdm(total=5, position=0)
+        self.top_bar = tqdm(total=5, position=0, bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} ')
         self.last_top = 0
         self.sub_bar = None
-    def phase(self, idx, name, substeps=0):
+    def phase(self, idx, name, substeps=0, bytes=False):
         up_by = idx - self.last_top
         self.last_top = idx
         self.last_sub = 0
@@ -23,7 +23,10 @@ class ProgressHooks(object):
         self.top_bar.set_description(name)
         self.top_bar.update(up_by)
         if substeps != 0:
-            self.sub_bar = tqdm(total=substeps, position=1)
+            extra = {}
+            if bytes:
+                extra = dict(unit='B', unit_divisor=1024, unit_scale=True)
+            self.sub_bar = tqdm(total=substeps, position=1, **extra)
         else:
             self.sub_bar = None
     def subphase_step(self, val = None):
@@ -34,8 +37,6 @@ class ProgressHooks(object):
         self.last_sub = val
         self.sub_bar.update(up_by)
     def set_substeps(self, num):
-        if self.sub_bar is None:
-            self.sub_bar = tqdm(position=1)
         self.sub_bar.total = num
     def close(self):
         self.top_bar.close()

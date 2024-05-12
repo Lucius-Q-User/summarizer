@@ -216,7 +216,7 @@ def generate_captions(progress_hooks, duration, ydl, video_url, tmpdir, model_na
     import numpy as np
     import whisper_cpp
 
-    progress_hooks.phase(2, 'Downloading audio track')
+    progress_hooks.phase(2, 'Downloading audio track', 1, bytes = True)
     ydl.download(video_url)
     aheads_name = model_name.replace('.', '_').replace('-', '_').upper()
     model = huggingface_hub.hf_hub_download('ggerganov/whisper.cpp', f'ggml-{model_name}.bin')
@@ -315,7 +315,7 @@ def load_config():
 def ydl_progress(d, progress_hooks):
     if d['status'] not in ['downloading', 'finished']:
         return
-    total = d.get('total_bytes', d.get('total_bytes_estimate', 0))
+    total = int(d.get('total_bytes', d.get('total_bytes_estimate', 0)))
     if total != 0:
         progress_hooks.set_substeps(total)
     progress_hooks.subphase_step(d['downloaded_bytes'])
