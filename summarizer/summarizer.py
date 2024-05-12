@@ -370,8 +370,10 @@ def process_video(progress_hooks, video_url, *,
     llm_runs = sum(len(x) for x in sections) + len(sections)
     progress_hooks.phase(4, 'Generating summaries', llm_runs)
     llm = PROVIDERS[llm_provider](verbose = verbose, **kwargs)
-    summaries = [summarize_hour(progress_hooks, llm, x) for x in sections]
-    llm.save_statitstics()
+    try:
+        summaries = [summarize_hour(progress_hooks, llm, x) for x in sections]
+    finally:
+        llm.save_statitstics()
 
     env = Environment()
     template_path = f'{os.path.dirname(__file__)}/template.j'
