@@ -1,0 +1,9 @@
+{
+    "name": "summarize",
+    "path": "##PATH##launcher.sh",
+    "description": "summarizes things",
+    "type": "stdio",
+    "allowed_extensions": [
+        "summarizer@lucius.q.user"
+    ]
+}

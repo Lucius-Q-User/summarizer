@@ -3,3 +3,7 @@
 def cli_main():
     from .cli import main
     main()
+
+def extension_main():
+    from .extension import main
+    main()

@@ -20,6 +20,7 @@ packages = ["summarizer"]
 
 [project.scripts]
 summarize = "summarizer:cli_main"
+summarize_ext = "summarizer:extension_main"
 
 [tool.setuptools.package-data]
 summarizer = ["*.j"]
