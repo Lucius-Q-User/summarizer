@@ -12,16 +12,13 @@
     "developer": {
         "name": "Lucius Q. User"
     },
-    "host_permissions": [
-        "*://*.youtube.com/*"
-    ],
     "manifest_version": 3,
     "name": "Summarizer",
     "permissions": [
         "menus",
         "nativeMessaging"
     ],
-    "version": "0.2",
+    "version": "0.2.1",
     "content_security_policy": {
         "extension_pages": "script-src 'self'; upgrade-insecure-requests; style-src-attr 'unsafe-inline';"
     }
