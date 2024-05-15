@@ -1,10 +1,16 @@
 #!/bin/bash
 
+cd "$(dirname "$0")"
 instdir=~/.local/share/summarize/
 mkdir -p "${instdir}"
 cp launcher.sh "${instdir}"
-mkdir -p ~/.mozilla/native-messaging-hosts/
-sed -e "s:##PATH##:${instdir}:" <summarize.json >~/.mozilla/native-messaging-hosts/summarize.json
+if grep -q Darwin <<<"$(uname)"; then
+    nhdir=~/Library/Application\ Support/Mozilla/NativeMessagingHosts
+else
+    nhdir=~/.mozilla/native-messaging-hosts
+fi
+mkdir -p "${nhdir}"
+sed -e "s:##PATH##:${instdir}:" <summarize.json >"${nhdir}/summarize.json"
 cd "${instdir}"
 python3 -m venv venv
 source venv/bin/activate
