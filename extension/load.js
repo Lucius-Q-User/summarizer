@@ -10,6 +10,7 @@ port.onMessage.addListener(async function (response) {
     document.open();
     document.write(response.data);
     document.close();
+    port.disconnect();
 });
 port.postMessage({
     action: "load",

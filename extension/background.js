@@ -1,18 +1,18 @@
-let port = browser.runtime.connectNative("summarize");
-port.onMessage.addListener(async function (response) {
-    let ctx = response.ctx;
-    let data = await browser.storage.session.get(ctx);
-    browser.tabs.sendMessage(data[ctx], response);
-});
-
 browser.menus.onClicked.addListener(async function (info) {
+    let port = browser.runtime.connectNative("summarize");
+
     let tab = await browser.tabs.create({
         url: "/progress.html",
     });
-    let ctx = crypto.randomUUID();
-    await browser.storage.session.set({
-        [ctx]: tab.id
+
+    port.onMessage.addListener(async function (response) {
+        browser.tabs.sendMessage(tab.id, response);
+        if (response.msg == "complete") {
+            port.disconnect();
+        }
     });
+
+    let ctx = crypto.randomUUID();
     port.postMessage({
         url: info.linkUrl,
         ctx: ctx,

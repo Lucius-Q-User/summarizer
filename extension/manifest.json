@@ -19,10 +19,9 @@
     "name": "Summarizer",
     "permissions": [
         "menus",
-        "nativeMessaging",
-        "storage"
+        "nativeMessaging"
     ],
-    "version": "0.1",
+    "version": "0.2",
     "content_security_policy": {
         "extension_pages": "script-src 'self'; upgrade-insecure-requests; style-src-attr 'unsafe-inline';"
     }
