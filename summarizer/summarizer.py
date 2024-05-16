@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import requests
-from io import BytesIO
 import os
 from jinja2 import Environment
 from collections import namedtuple
@@ -160,57 +159,38 @@ def make_cache_dir():
     os.makedirs(alt_path, exist_ok=True)
     return alt_path
 
-def fetch_ffmpeg():
-    ffmpeg = 'ffmpeg'
-    if shutil.which(ffmpeg) is not None:
-        return ffmpeg
-    alt_path = make_cache_dir()
-    ffmpeg = f'{alt_path}/ffmpeg'
-    if os.path.isfile(ffmpeg):
-        return ffmpeg
-    if sys.platform == 'darwin':
-        from zipfile import ZipFile
-        zip_data = BytesIO(requests.get('https://evermeet.cx/ffmpeg/get/zip').content)
-        with ZipFile(zip_data, 'r') as zf:
-            with zf.open(zf.namelist()[0]) as entry:
-                with open(ffmpeg, 'wb') as target:
-                    target.write(entry.read())
-    elif sys.platform == 'linux':
-        import tarfile
-        data = BytesIO(requests.get('https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz').content)
-        with tarfile.open(mode='r:xz', fileobj=data) as tar:
-            member = tar.next()
-            while member is not None:
-                if member.name.endswith('/ffmpeg'):
-                    with open(ffmpeg, 'wb') as target:
-                        target.write(tar.extractfile(member).read())
-                    break
-                member = tar.next()
-    os.chmod(ffmpeg, 0o755)
-    return ffmpeg
-
 AUDIO_RATE = 16000
 N_SAMPLES = AUDIO_RATE * 60 * 5
 def decode_audio(tmpdir, verbose):
-    import subprocess
-    ffmpeg_cmd = fetch_ffmpeg()
-    args = [ffmpeg_cmd, '-nostdin', '-i', f'{tmpdir}/{AUDIO_FILE}', '-f', 's16le', '-ac', '1', '-acodec', 'pcm_s16le', '-ar', f'{AUDIO_RATE}', '-']
-    stderr = subprocess.PIPE
-    if not verbose:
-        stderr = subprocess.DEVNULL
-    ffmpeg = subprocess.Popen(args, stdin = subprocess.DEVNULL, stdout = subprocess.PIPE, stderr = stderr)
-    to_read = N_SAMPLES * 2
-    data = []
-    while ffmpeg.poll() is None:
-        buf = ffmpeg.stdout.read(to_read)
-        data.append(buf)
-        to_read -= len(buf)
-        if to_read == 0:
-            yield b''.join(data)
-            to_read = N_SAMPLES * 2
-            data = []
-    if len(data) != 0:
-        yield b''.join(data)
+    import av
+    audio = av.open(f'{tmpdir}/{AUDIO_FILE}')
+    audio.streams.audio[0].thread_type = 'AUTO'
+    rs = av.audio.resampler.AudioResampler(format = 's16', layout = 'mono', rate = AUDIO_RATE)
+    for packet in audio.demux(audio = 0):
+        for frame in packet.decode():
+            yield from rs.resample(frame)
+    yield from rs.resample(None)
+
+def package_chunks(frames):
+    import numpy as np
+    samples = 0
+    cur_chunk = []
+    for frame in frames:
+        nda = frame.to_ndarray()
+        nda.shape = (-1,)
+        samples += nda.shape[0]
+        cur_chunk.append(nda)
+        while samples >= N_SAMPLES:
+            cs = np.concatenate(cur_chunk)
+            yield cs[:N_SAMPLES]
+            rem = cs[N_SAMPLES:]
+            samples = rem.shape[0]
+            if samples != 0:
+                cur_chunk = [rem]
+            else:
+                cur_chunk = []
+    if samples > 0:
+        yield np.concatenate(cur_chunk)
 
 def generate_captions(progress_hooks, duration, ydl, video_url, tmpdir, model_name, verbose):
     import numpy as np
@@ -223,8 +203,8 @@ def generate_captions(progress_hooks, duration, ydl, video_url, tmpdir, model_na
     ws = whisper_cpp.Whisper(model, getattr(whisper_cpp, f'WHISPER_AHEADS_{aheads_name}'), verbose)
     progress_hooks.phase(3, 'Generating transcript', math.ceil(duration / 300))
     segments = []
-    for i, chunk in enumerate(decode_audio(tmpdir, verbose)):
-        samples = np.frombuffer(chunk, np.int16).flatten().astype(np.float32) / 32768.0
+    for i, chunk in enumerate(package_chunks(decode_audio(tmpdir, verbose))):
+        samples = chunk.astype(np.float32) / 32768.0
         seg = ws.transcribe(samples)
         for s in seg:
             segments.append(Segment(s.start + i * 300, s.end + i * 300, s.text))
