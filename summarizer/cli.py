@@ -58,7 +58,6 @@ def main():
     parser.add_argument('-wm', '--whisper-model',
                         choices = ['tiny', 'tiny.en', 'base', WHISPER_DEFAULT, 'small', 'small.en', 'medium', 'medium.en', 'large-v1', 'large-v2', 'large-v3'],
                         default = config.get('whisper_model'))
-    parser.add_argument('-mp', '--meta-proxy', default = config.get('meta_proxy'))
     parser.add_argument('-v', '--verbose', default = config.get('verbose'), action  = 'store_true')
     parser.add_argument('--force-local-transcribe', action = 'store_true')
     args = parser.parse_args()

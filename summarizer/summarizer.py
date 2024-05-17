@@ -43,24 +43,6 @@ class LocalLLM(object):
     def save_statitstics(self):
         pass
 
-class MetaaiLLM(object):
-    def __init__(self, meta_proxy = None, **kwargs):
-        self.proxy = meta_proxy
-        self.reinitialize()
-    def reinitialize(self):
-        from .meta import MetaSession
-        self.session = MetaSession(self.proxy)
-    def run_llm(self, prompt):
-        for i in range(3):
-            try:
-                convo = self.session.new_conversation()
-                return self.session.send_message(convo, prompt)
-            except Exception:
-                self.reinitialize()
-        raise Exception('Max retries exceeded')
-    def save_statitstics(self):
-        pass
-
 class ChatgptLLM(object):
     def __init__(self, **kwargs):
         pass
@@ -277,8 +259,7 @@ PROVIDERS = {
     LOCAL_PROVIDER: LocalLLM,
     'openai': OpenaiLLM,
     'groq': OpenaiLLM,
-    'chatgpt': ChatgptLLM,
-    'meta': MetaaiLLM
+    'chatgpt': ChatgptLLM
 }
 
 def load_config():
