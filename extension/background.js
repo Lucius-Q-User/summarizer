@@ -1,8 +1,9 @@
-async function doSummarize(url) {
+async function doSummarize(url, background) {
     let port = browser.runtime.connectNative("summarize");
 
     let tab = await browser.tabs.create({
         url: "/progress.html",
+        active: !background
     });
 
     port.onMessage.addListener(async function (response) {
@@ -21,11 +22,13 @@ async function doSummarize(url) {
 }
 
 browser.menus.onClicked.addListener((info) => {
-    doSummarize(info.linkUrl);
+    let cmd = info.modifiers.includes("Command");
+    let ctrl = info.modifiers.includes("Ctrl") && !info.modifiers.includes("MacCtrl");
+    doSummarize(info.linkUrl, cmd || ctrl);
 });
 
 browser.pageAction.onClicked.addListener((tab) => {
-    doSummarize(tab.url);
+    doSummarize(tab.url, true);
 })
 
 browser.menus.create({

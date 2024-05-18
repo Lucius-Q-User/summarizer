@@ -19,7 +19,7 @@
         "nativeMessaging",
         "activeTab"
     ],
-    "version": "0.2.1",
+    "version": "0.2.3",
     "content_security_policy": {
         "extension_pages": "script-src 'self'; upgrade-insecure-requests; style-src-attr 'unsafe-inline';"
     },

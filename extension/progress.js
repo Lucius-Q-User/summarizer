@@ -18,6 +18,8 @@ browser.runtime.onMessage.addListener((data, sender) => {
         }
         state.substeps = substeps;
         state.cur_substeps = 0;
+        subphaseProgress.style.width = "0%";
+        subphaseProgress.innerText = "";
     } else if (data.msg == "set_substeps") {
         state.substeps = data.num;
     } else if (data.msg == "subphase_step") {
@@ -27,6 +29,7 @@ browser.runtime.onMessage.addListener((data, sender) => {
         }
         state.cur_substeps += val;
         subphaseProgress.style.width = Math.floor(100 * state.cur_substeps / state.substeps) + "%";
+        subphaseProgress.innerText = state.cur_substeps + "/" + state.substeps;
     } else if (data.msg == "complete") {
         window.location.replace(browser.runtime.getURL("summary.html") + "#" + data.id);
     }
