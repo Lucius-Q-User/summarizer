@@ -16,10 +16,15 @@
     "name": "Summarizer",
     "permissions": [
         "menus",
-        "nativeMessaging"
+        "nativeMessaging",
+        "activeTab"
     ],
     "version": "0.2.1",
     "content_security_policy": {
         "extension_pages": "script-src 'self'; upgrade-insecure-requests; style-src-attr 'unsafe-inline';"
+    },
+    "page_action": {
+        "default_title": "Summarize Video",
+        "show_matches": ["*://*.youtube.com/watch?v=*"]
     }
 }

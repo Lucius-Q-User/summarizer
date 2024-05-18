@@ -1,4 +1,4 @@
-browser.menus.onClicked.addListener(async function (info) {
+async function doSummarize(url) {
     let port = browser.runtime.connectNative("summarize");
 
     let tab = await browser.tabs.create({
@@ -14,11 +14,19 @@ browser.menus.onClicked.addListener(async function (info) {
 
     let ctx = crypto.randomUUID();
     port.postMessage({
-        url: info.linkUrl,
+        url: url,
         ctx: ctx,
         action: "process"
     });
+}
+
+browser.menus.onClicked.addListener((info) => {
+    doSummarize(info.linkUrl);
 });
+
+browser.pageAction.onClicked.addListener((tab) => {
+    doSummarize(tab.url);
+})
 
 browser.menus.create({
     contexts: [
