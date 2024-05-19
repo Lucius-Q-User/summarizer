@@ -52,6 +52,24 @@ class ChatgptLLM(object):
     def save_statitstics(self):
         pass
 
+class HuggingchatLLM(object):
+    def __init__(self, huggingchat_model = 'meta-llama/Meta-Llama-3-70B-Instruct', **kwargs):
+        self.model = huggingchat_model
+        self.reinitialize()
+    def reinitialize(self):
+        from .huggingchat import HuggingchatSession
+        self.session = HuggingchatSession(self.model)
+    def run_llm(self, prompt):
+        from .huggingchat import TooManyRequestsError
+        for i in range(5):
+            try:
+                return self.session.send_request(prompt)
+            except TooManyRequestsError:
+                self.reinitialize()
+        raise Exception('Max retries exceeded')
+    def save_statitstics(self):
+        pass
+
 class OpenaiLLM(object):
     def __init__(self, openai_api_key,
                  openai_model = 'llama3-8b-8192',
@@ -259,7 +277,8 @@ PROVIDERS = {
     LOCAL_PROVIDER: LocalLLM,
     'openai': OpenaiLLM,
     'groq': OpenaiLLM,
-    'chatgpt': ChatgptLLM
+    'chatgpt': ChatgptLLM,
+    'huggingchat': HuggingchatLLM
 }
 
 def load_config():

@@ -53,6 +53,7 @@ def main():
                         action = 'append', default = config.get('sponsorblock'))
     parser.add_argument('-lmr', '--local-model-repo', default = config.get('local_model_repo'))
     parser.add_argument('-lmf', '--local-model-file', default = config.get('local_model_file'))
+    parser.add_argument('-hm', '--huggingchat-model', default = config.get('huggingchat_model'))
     parser.add_argument('-om', '-gm', '--openai-model', '--groq-model', default = config.get('openai_model'))
     parser.add_argument('-ou', '--openai-base-url', default = config.get('openai_base_url'))
     parser.add_argument('-wm', '--whisper-model',
