@@ -1,0 +1,101 @@
+name: Build
+
+on:
+  push:
+    paths-ignore:
+      - 'ci/**'
+      - 'ext-installer/**'
+      - 'extension/**'
+  pull_request:
+
+jobs:
+  build_wheels:
+    name: Build wheels on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-14, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up QEMU
+        if: runner.os == 'Linux'
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: all
+
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.18.1
+        env:
+          CIBW_ARCHS_LINUX: x86_64 aarch64
+          CIBW_ARCHS_WINDOWS: AMD64 ARM64
+          CIBW_ARCHS_MACOS: universal2
+          CIBW_SKIP: "*-musllinux_*"
+          CIBW_TEST_SKIP: "*-win_arm64"
+          CIBW_BEFORE_BUILD_MACOS: >
+            wget https://github.com/Lucius-Q-User/summarizer/releases/download/ffmpeg-thing/ffmpeg-macos.tar.gz &&
+            sudo tar xkf ffmpeg-macos.tar.gz -C /
+          CIBW_BEFORE_BUILD_WINDOWS: >
+            powershell "choco install -y pkgconfiglite;
+            if ($env:PYTHON_ARCH.Equals('ARM64')) {
+            $url = 'https://github.com/Lucius-Q-User/summarizer/releases/download/ffmpeg-thing/ffmpeg-armdows.zip'
+            } else {
+            $url = 'https://github.com/Lucius-Q-User/summarizer/releases/download/ffmpeg-thing/ffmpeg-windows.zip'
+            };
+            Invoke-RestMethod $url -OutFile ffmpeg.zip;
+            $dir = 'D:\\a\\ffmpeg';
+            if (Test-Path $dir) { Remove-Item -Recurse $dir };
+            New-Item $dir -ItemType Directory;
+            Expand-Archive ffmpeg.zip -Destination $dir"
+          CIBW_ENVIRONMENT_WINDOWS: PKG_CONFIG_PATH="D:\\a\\ffmpeg\\ffmpeg\\lib\\pkgconfig;"
+          CIBW_REPAIR_WHEEL_COMMAND_WINDOWS: >
+            powershell "$dir = 'D:\\a\\ffmpeg\\ffmpeg';
+            Remove-Item $dir\\bin\\ffmpeg.exe;
+            Remove-Item $dir\\bin\\ffprobe.exe;
+            Move-Item $dir\\bin $dir\\summarizer;
+            $zwheel = '{wheel}'.Replace('.whl', '.zip');
+            Move-Item {wheel} $zwheel;
+            Compress-Archive $dir\\summarizer $zwheel -Update;
+            Move-Item $zwheel {wheel};
+            Move-Item {wheel} {dest_dir};"
+          CIBW_MANYLINUX_X86_64_IMAGE: ghcr.io/lucius-q-user/manylinux-ffmpeg-x86_64
+          CIBW_MANYLINUX_AARCH64_IMAGE: ghcr.io/lucius-q-user/manylinux-ffmpeg-aarch64
+          CIBW_REPAIR_WHEEL_COMMAND_MACOS: delocate-wheel --require-archs {delocate_archs} -w {dest_dir} -v {wheel} --require-target-macos-version 11.0
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cibw-wheels-${{ matrix.os }}-${{ strategy.job-index }}
+          path: ./wheelhouse/*.whl
+  build_sdist:
+    name: Build source distribution
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Build sdist
+        run: pipx run build --sdist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cibw-sdist
+          path: dist/*.tar.gz
+
+  upload_pypi:
+    needs: [build_wheels, build_sdist]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: cibw-*
+          path: dist
+          merge-multiple: true
+      - uses: pypa/gh-action-pypi-publish@release/v1
