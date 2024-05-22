@@ -25,9 +25,10 @@ browser.runtime.onMessage.addListener((data, sender) => {
     } else if (data.msg == "subphase_step") {
         let val = data.val;
         if (val == null) {
-            val = 1;
+            state.cur_substeps += 1;
+        } else {
+            state.cur_substeps = val;
         }
-        state.cur_substeps += val;
         subphaseProgress.style.width = Math.floor(100 * state.cur_substeps / state.substeps) + "%";
         subphaseProgress.innerText = state.cur_substeps + "/" + state.substeps;
     } else if (data.msg == "complete") {
