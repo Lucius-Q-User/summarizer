@@ -161,39 +161,40 @@ def make_cache_dir():
 
 AUDIO_RATE = 16000
 N_SAMPLES = AUDIO_RATE * 60 * 5
-def decode_audio(tmpdir, verbose):
-    import av
-    audio = av.open(f'{tmpdir}/{AUDIO_FILE}')
-    audio.streams.audio[0].thread_type = 'AUTO'
-    rs = av.audio.resampler.AudioResampler(format = 's16', layout = 'mono', rate = AUDIO_RATE)
-    for packet in audio.demux(audio = 0):
-        for frame in packet.decode():
-            yield from rs.resample(frame)
-    yield from rs.resample(None)
-
-def package_chunks(frames):
+def decode_audio(tmpdir, callback):
+    import ctypes
     import numpy as np
-    samples = 0
-    cur_chunk = []
-    for frame in frames:
-        nda = frame.to_ndarray()
-        nda.shape = (-1,)
-        samples += nda.shape[0]
-        cur_chunk.append(nda)
-        while samples >= N_SAMPLES:
-            cs = np.concatenate(cur_chunk)
-            yield cs[:N_SAMPLES]
-            rem = cs[N_SAMPLES:]
-            samples = rem.shape[0]
-            if samples != 0:
-                cur_chunk = [rem]
-            else:
-                cur_chunk = []
-    if samples > 0:
-        yield np.concatenate(cur_chunk)
+    if sys.platform == 'darwin':
+        name = 'libnative.dylib'
+    elif sys.platform == 'linux':
+        name = 'libnative.so'
+    elif sys.platform == 'win32':
+        name = 'native.dll'
+    lib = ctypes.CDLL(f'{os.path.dirname(__file__)}/{name}')
+
+    cb_type = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.POINTER(ctypes.c_float), ctypes.c_size_t)
+
+    c_decode_audio = lib.decode_audio
+    c_decode_audio.restype = ctypes.c_char_p
+    c_decode_audio.argtypes = [ctypes.c_char_p, ctypes.c_size_t, cb_type]
+    exc = None
+    def wrap(array, size):
+        try:
+            ty = ctypes.c_float * size
+            array = ctypes.cast(array, ctypes.POINTER(ty)).contents
+            callback(np.frombuffer(array, dtype=np.float32, count=size))
+        except BaseException as e:
+            nonlocal exc
+            exc = e
+            return -1
+        return 0
+    err = c_decode_audio(f'{tmpdir}/{AUDIO_FILE}'.encode(), N_SAMPLES, cb_type(wrap))
+    if exc is not None:
+        raise exc
+    if err is not None:
+        raise Exception(f'Decode error: {err.decode()}')
 
 def generate_captions(progress_hooks, duration, ydl, video_url, tmpdir, model_name, verbose):
-    import numpy as np
     import whisper_cpp
 
     progress_hooks.phase(2, 'Downloading audio track', 1, bytes = True)
@@ -203,12 +204,15 @@ def generate_captions(progress_hooks, duration, ydl, video_url, tmpdir, model_na
     ws = whisper_cpp.Whisper(model, getattr(whisper_cpp, f'WHISPER_AHEADS_{aheads_name}'), verbose)
     progress_hooks.phase(3, 'Generating transcript', math.ceil(duration / 300))
     segments = []
-    for i, chunk in enumerate(package_chunks(decode_audio(tmpdir, verbose))):
-        samples = chunk.astype(np.float32) / 32768.0
+    i = 0
+    def callback(samples):
+        nonlocal i
         seg = ws.transcribe(samples)
         for s in seg:
             segments.append(Segment(s.start + i * 300, s.end + i * 300, s.text))
         progress_hooks.subphase_step()
+        i += 1
+    decode_audio(tmpdir, callback)
     return segments
 
 def sectionize_captions(captions, duration):
