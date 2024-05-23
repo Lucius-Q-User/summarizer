@@ -48,7 +48,7 @@ static char *receive_and_filter(AVFrame *frame, AVFrame *filt_frame, AVCodecCont
     char *str_err = NULL;
     while ((err = avcodec_receive_frame(dec_ctx, frame)) == 0) {
         err = av_buffersrc_add_frame_flags(filter->src_ctx, frame, AV_BUFFERSRC_FLAG_KEEP_REF);
-        if (err != 0) {
+        if (err < 0) {
             str_err = format_error("adding frame to filter", err);
             goto loop_end;
         }
@@ -84,13 +84,17 @@ static struct filter create_filter_graph(AVRational time_base, AVCodecContext *d
     AVFilterContext *filt_sink_ctx = NULL;
     char *abuffer_args;
     char ch_layout[64];
-    av_get_channel_layout_string(ch_layout, 64, dec_ctx->channels, dec_ctx->channel_layout);
+    int err = av_channel_layout_describe(&dec_ctx->ch_layout, ch_layout, 64);
+    if (err < 0) {
+        str_err = format_error("getting channel layout", err);
+        goto err_free_graph;
+    }
     asprintf(&abuffer_args, "time_base=%d/%d:sample_rate=%d:sample_fmt=%s:channel_layout=%s",
              time_base.num, time_base.den, dec_ctx->sample_rate,
              av_get_sample_fmt_name(dec_ctx->sample_fmt), ch_layout);
-    int err = avfilter_graph_create_filter(&filt_src_ctx, src_filt, "in", abuffer_args, NULL, graph);
+    err = avfilter_graph_create_filter(&filt_src_ctx, src_filt, "in", abuffer_args, NULL, graph);
     free(abuffer_args);
-    if (err != 0) {
+    if (err < 0) {
         str_err = format_error("creating input filter", err);
         goto err_free_graph;
     }
@@ -110,9 +114,7 @@ static struct filter create_filter_graph(AVRational time_base, AVCodecContext *d
         goto err_free_graph;
     }
 
-    int64_t channel_layouts[2] = { AV_CH_LAYOUT_MONO, -1 };
-    err = av_opt_set_int_list(filt_sink_ctx, "channel_layouts", channel_layouts, -1,
-                              AV_OPT_SEARCH_CHILDREN);
+    err = av_opt_set(filt_sink_ctx, "ch_layouts", "mono", AV_OPT_SEARCH_CHILDREN);
     if (err < 0) {
         str_err = format_error("setting channel layout", err);
         goto err_free_graph;
@@ -166,12 +168,12 @@ char *decode_audio(const char *path, size_t block_size, buffer_cb callback) {
     AVFormatContext *fmt_ctx = NULL;
     char *str_err = NULL;
     int err = avformat_open_input(&fmt_ctx, path, NULL, NULL);
-    if (err != 0) {
+    if (err < 0) {
         str_err = format_error("opening input", err);
         goto out_ret;
     }
     err = avformat_find_stream_info(fmt_ctx, NULL);
-    if (err != 0) {
+    if (err < 0) {
         str_err = format_error("getting stream info", err);
         goto out_close_input;
     }
@@ -195,12 +197,12 @@ char *decode_audio(const char *path, size_t block_size, buffer_cb callback) {
     }
     AVCodecContext *dec_ctx = avcodec_alloc_context3(decoder);
     err = avcodec_parameters_to_context(dec_ctx, codec_params);
-    if (err != 0) {
+    if (err < 0) {
         str_err = format_error("adding codec parameters", err);
         goto out_free_dec_ctx;
     }
     err = avcodec_open2(dec_ctx, decoder, NULL);
-    if (err != 0) {
+    if (err < 0) {
         str_err = format_error("opening decoder", err);
         goto out_free_dec_ctx;
     }
@@ -222,7 +224,7 @@ char *decode_audio(const char *path, size_t block_size, buffer_cb callback) {
     };
     while ((err = av_read_frame(fmt_ctx, packet)) == 0) {
         err = avcodec_send_packet(dec_ctx, packet);
-        if (err != 0) {
+        if (err < 0) {
             str_err = format_error("sending packet to decoder", err);
             goto loop_end;
         }
@@ -238,7 +240,7 @@ char *decode_audio(const char *path, size_t block_size, buffer_cb callback) {
         goto out_free_packet;
     }
     err = avcodec_send_packet(dec_ctx, NULL);
-    if (err != 0) {
+    if (err < 0) {
         str_err = format_error("sending packet to decoder", err);
         goto out_free_packet;
     }
