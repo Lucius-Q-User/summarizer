@@ -71,7 +71,7 @@ def main():
     progress = ProgressHooks()
     result = process_video(progress, **kwargs)
     progress.close()
-    filename = f'{OUT_DIR}/{result.video_id}.html'
+    filename = os.path.join(OUT_DIR, f'{result.video_id}.html')
     os.makedirs(OUT_DIR, exist_ok = True)
     with open(filename, 'w') as out:
         out.write(result.summary)
@@ -79,4 +79,6 @@ def main():
         if shutil.which(opener) is not None:
             os.execlp(opener, opener, filename)
             return
+    if shutil.which('cmd') is not None:
+        os.execlp('cmd', 'cmd', '/c', filename)
     print(f'Unable to open the file automatically, the output was written to {filename}')

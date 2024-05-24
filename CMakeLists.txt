@@ -3,13 +3,15 @@ project(native)
 
 find_package(PkgConfig)
 
+include(CheckSymbolExists)
+
 pkg_check_modules(AVFORMAT REQUIRED IMPORTED_TARGET libavformat)
 pkg_check_modules(AVFILTER REQUIRED IMPORTED_TARGET libavfilter)
 pkg_check_modules(AVUTIL REQUIRED IMPORTED_TARGET libavutil)
 pkg_check_modules(AVCODEC REQUIRED IMPORTED_TARGET libavcodec)
 
 add_library(native SHARED
-  summarizer/audio_decode.c
+    summarizer/audio_decode.c
 )
 
 target_link_libraries(native PUBLIC
@@ -18,6 +20,11 @@ target_link_libraries(native PUBLIC
     PkgConfig::AVUTIL
     PkgConfig::AVCODEC
 )
+
+check_symbol_exists(asprintf "stdio.h" have_asprintf)
+if (${have_asprintf})
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -DHAVE_ASPRINTF=1")
+endif()
 
 install(
     TARGETS native

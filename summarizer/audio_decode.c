@@ -6,6 +6,27 @@
 #include <libavfilter/buffersink.h>
 #include <libavutil/opt.h>
 
+#ifdef _WIN32
+#define EXPORT __declspec(dllexport)
+#else
+#define EXPORT
+#endif
+
+#ifndef HAVE_ASPRINTF
+#include <stdarg.h>
+
+int asprintf(char **ret_str, const char *format, ...) {
+    va_list args, args2;
+    va_start(args, format);
+    va_copy(args2, args);
+    int len = _vscprintf(format, args2) + 1;
+    char *str = malloc(len);
+    int ret = vsnprintf(str, len, format, args);
+    *ret_str = str;
+    return ret;
+}
+#endif
+
 typedef int (*buffer_cb)(float *data, size_t size);
 
 static char *format_error(const char *outer, int err) {
@@ -164,7 +185,7 @@ static struct filter create_filter_graph(AVRational time_base, AVCodecContext *d
     goto out;
 }
 
-char *decode_audio(const char *path, size_t block_size, buffer_cb callback) {
+EXPORT char *decode_audio(const char *path, size_t block_size, buffer_cb callback) {
     AVFormatContext *fmt_ctx = NULL;
     char *str_err = NULL;
     int err = avformat_open_input(&fmt_ctx, path, NULL, NULL);

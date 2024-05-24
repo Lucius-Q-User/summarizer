@@ -13,6 +13,7 @@ import sys
 import shutil
 import math
 from datetime import datetime
+from pathlib import Path
 
 Segment = namedtuple('Segment', ['start', 'end', 'text'])
 HourSummary = namedtuple('HourSummary', ['overall', 'parts'])
@@ -154,7 +155,7 @@ def make_cache_dir():
     if XDG_CACHE_HOME in os.environ:
         cache_path = os.environ[XDG_CACHE_HOME]
     else:
-        cache_path = f'{os.environ["HOME"]}/.cache'
+        cache_path = f'{Path.home()}/.cache'
     alt_path = f'{cache_path}/summarize'
     os.makedirs(alt_path, exist_ok=True)
     return alt_path
@@ -289,7 +290,7 @@ def load_config():
     if XDG_CONFIG_HOME in os.environ:
         cfg_dir = os.environ[XDG_CONFIG_HOME]
     else:
-        cfg_dir = f'{os.environ["HOME"]}/.config'
+        cfg_dir = f'{Path.home()}/.config'
     try:
         with open(f'{cfg_dir}/summarize.json') as cfgfile:
             return json.load(cfgfile)
@@ -360,7 +361,7 @@ def process_video(progress_hooks, video_url, *,
         llm.save_statitstics()
 
     env = Environment()
-    template_path = f'{os.path.dirname(__file__)}/template.j'
+    template_path = f'{os.path.dirname(__file__)}/template.html'
     templ = env.from_string(open(template_path).read())
     title = video_info['title']
 
