@@ -14,4 +14,4 @@ sed -e "s:##PATH##:${instdir}:" <summarize.json >"${nhdir}/summarize.json"
 cd "${instdir}"
 python3 -m venv venv
 source venv/bin/activate
-pip3 install git+https://github.com/Lucius-Q-User/summarizer
+pip3 install llama-summarizer

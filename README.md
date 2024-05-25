@@ -4,10 +4,8 @@ Uses a locally running copy of Mistral 7b to generate per-section summaries of y
 
 ### Installation
 ```
-pip install git+https://github.com/Lucius-Q-User/summarizer
+pip install llama-summarizer
 ```
-
-Only macos and linux are supported. If you are running windows - may or may not run under WSL.
 
 ### Basic usage
 ```
