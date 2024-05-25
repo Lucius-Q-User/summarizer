@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 async function doSummarize(url, background) {
     let port = browser.runtime.connectNative("summarize");
 

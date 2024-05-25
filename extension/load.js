@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 let id = window.location.hash.substring(1);
 let port = browser.runtime.connectNative("summarize");
 let uuid = crypto.randomUUID();

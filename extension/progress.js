@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 let phaseName = document.querySelector("#phase_name");
 let phaseProgress = document.querySelector("#phase_progress");
 let subphaseProgress = document.querySelector("#subphase_progress");
