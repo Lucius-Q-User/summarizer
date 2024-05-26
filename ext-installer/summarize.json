@@ -1,6 +1,6 @@
 {
     "name": "summarize",
-    "path": "##PATH##launcher.sh",
+    "path": "##PATH##",
     "description": "summarizes things",
     "type": "stdio",
     "allowed_extensions": [
