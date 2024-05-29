@@ -201,18 +201,19 @@ EXPORT char *decode_audio(const char *path, size_t block_size, buffer_cb callbac
         goto out_close_input;
     }
 
-    if (fmt_ctx->nb_streams != 1) {
-        asprintf(&str_err, "invalid number of streams: %d", fmt_ctx->nb_streams);
+    int stream_id = -1;
+    for (int i = 0; i < fmt_ctx->nb_streams; i++) {
+        if (fmt_ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
+            stream_id = i;
+            break;
+        }
+    }
+    if (stream_id == -1) {
+        str_err = strdup("Unable to find the audio stream");
         goto out_close_input;
     }
 
-    AVCodecParameters *codec_params = fmt_ctx->streams[0]->codecpar;
-    enum AVMediaType codec_type = codec_params->codec_type;
-    if (codec_type != AVMEDIA_TYPE_AUDIO) {
-        asprintf(&str_err, "invalid stream type: %s", av_get_media_type_string(codec_type));
-        goto out_close_input;
-    }
-
+    AVCodecParameters *codec_params = fmt_ctx->streams[stream_id]->codecpar;
     AVCodec *decoder = avcodec_find_decoder(codec_params->codec_id);
     if (!decoder) {
         asprintf(&str_err, "can't find decoder for codec: %s", avcodec_get_name(codec_params->codec_id));
@@ -230,7 +231,7 @@ EXPORT char *decode_audio(const char *path, size_t block_size, buffer_cb callbac
         goto out_free_dec_ctx;
     }
     char *graph_err;
-    struct filter filter = create_filter_graph(fmt_ctx->streams[0]->time_base, dec_ctx, &graph_err);
+    struct filter filter = create_filter_graph(fmt_ctx->streams[stream_id]->time_base, dec_ctx, &graph_err);
     if (graph_err != NULL) {
         asprintf(&str_err, "creating filter graph: %s", graph_err);
         free(graph_err);
@@ -246,6 +247,9 @@ EXPORT char *decode_audio(const char *path, size_t block_size, buffer_cb callbac
         .size = block_size
     };
     while ((err = av_read_frame(fmt_ctx, packet)) == 0) {
+        if (packet->stream_index != stream_id) {
+            continue;
+        }
         err = avcodec_send_packet(dec_ctx, packet);
         if (err < 0) {
             str_err = format_error("sending packet to decoder", err);
