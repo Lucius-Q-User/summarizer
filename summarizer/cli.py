@@ -73,8 +73,8 @@ def main():
     progress.close()
     filename = os.path.join(OUT_DIR, f'{result.video_id}.html')
     os.makedirs(OUT_DIR, exist_ok = True)
-    with open(filename, 'w') as out:
-        out.write(result.summary)
+    with open(filename, 'wb') as out:
+        out.write(result.summary.encode('utf-8'))
     for opener in ['open', 'xdg-open']:
         if shutil.which(opener) is not None:
             os.execlp(opener, opener, filename)

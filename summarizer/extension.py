@@ -56,8 +56,8 @@ def summarize(msg):
     )
     filename = f'{OUT_DIR}/{result.video_id}.html'
     os.makedirs(OUT_DIR, exist_ok = True)
-    with open(filename, 'w') as out:
-        out.write(result.summary)
+    with open(filename, 'wb') as out:
+        out.write(result.summary.encode('utf-8'))
     output({
         'msg': 'complete',
         'id': result.video_id,
