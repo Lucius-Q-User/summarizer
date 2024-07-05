@@ -14,6 +14,7 @@ import shutil
 import math
 from datetime import datetime
 from pathlib import Path
+import ctypes
 
 Segment = namedtuple('Segment', ['start', 'end', 'text'])
 HourSummary = namedtuple('HourSummary', ['overall', 'parts'])
@@ -21,9 +22,108 @@ TimeUrlFn = namedtuple('TimeUrlFn', ['extractor', 'fn'])
 ProcessResult = namedtuple('ProcessResult', ['video_id', 'summary'])
 
 AUDIO_FILE = 'audio.m4a'
-WHISPER_DEFAULT = 'base.en'
+LOCAL_WHISPER_DEFAULT = 'base.en'
 XDG_CACHE_HOME = 'XDG_CACHE_HOME'
 XDG_CONFIG_HOME = 'XDG_CONFIG_HOME'
+AUDIO_RATE = 16000
+LOCAL_PROVIDER = 'local'
+
+cb_type = ctypes.CFUNCTYPE(ctypes.c_char_p, ctypes.POINTER(ctypes.c_float), ctypes.c_size_t, ctypes.c_void_p)
+class LocalWhisper(object):
+    CHUNK_SECS = 60 * 5
+    N_SAMPLES = AUDIO_RATE * CHUNK_SECS
+    def __init__(self, verbose = False, local_whisper_model = LOCAL_WHISPER_DEFAULT, **kwargs):
+        import whisper_cpp
+        aheads_name = local_whisper_model.replace('.', '_').replace('-', '_').upper()
+        model = huggingface_hub.hf_hub_download('ggerganov/whisper.cpp', f'ggml-{local_whisper_model}.bin')
+        self.ws = whisper_cpp.Whisper(model, getattr(whisper_cpp, f'WHISPER_AHEADS_{aheads_name}'), verbose)
+        self.lib = load_native()
+    def generate_captions(self, path, progress_hooks):
+        segments = []
+        i = 0
+        def callback(samples):
+            nonlocal i
+            seg = self.ws.transcribe(samples)
+            for s in seg:
+                segments.append(Segment(s.start + i * 300, s.end + i * 300, s.text))
+            progress_hooks.subphase_step()
+            i += 1
+        self.decode_audio(path, callback)
+        return segments
+    def decode_audio(self, path, callback):
+        import numpy as np
+
+        c_decode_audio = self.lib.decode_audio
+        c_decode_audio.restype = ctypes.c_char_p
+        c_decode_audio.argtypes = [ctypes.c_char_p, ctypes.c_size_t, cb_type, ctypes.c_void_p]
+        exc = None
+        def wrap(array, size, _unused):
+            try:
+                ty = ctypes.c_int16 * size
+                array = ctypes.cast(array, ctypes.POINTER(ty)).contents
+                callback(np.frombuffer(array, dtype=np.int16, count=size).astype(np.float32) / 32768.0)
+            except BaseException as e:
+                nonlocal exc
+                exc = e
+                return b"Python exception"
+            return None
+        err = c_decode_audio(path.encode(), self.N_SAMPLES, cb_type(wrap), None)
+        if exc is not None:
+            raise exc
+        if err is not None:
+            raise Exception(f'Decode error: {err.decode()}')
+
+class OpenaiWhisper(object):
+    CHUNK_SECS = 60 * 60
+    N_SAMPLES = AUDIO_RATE * CHUNK_SECS
+    def __init__(self, openai_api_key,
+                 openai_base_url = 'https://api.groq.com/openai/v1',
+                 openai_whisper_model = 'whisper-large-v3',
+                 **kwargs):
+        self.lib = load_native()
+        self.api_key = openai_api_key
+        self.base_url = openai_base_url
+        self.model = openai_whisper_model
+    def transcribe_chunk(self, i, chunk, segments):
+        headers = {
+            'Authorization': f'Bearer {self.api_key}',
+        }
+        files = {
+            'model': (None, self.model),
+            'response_format': (None, 'verbose_json'),
+            'file': ('file.ogg', chunk)
+        }
+        resp = requests.post(f'{self.base_url}/audio/transcriptions', headers = headers, files = files)
+        jresp = resp.json()
+        for s in jresp['segments']:
+            seg = Segment(int(s['start']) + i * 3600, int(s['end']) + i * 3600, s['text'])
+            segments.append(seg)
+    def generate_captions(self, path, progress_hooks):
+        c_transcode_audio = self.lib.transcode_audio
+        c_transcode_audio.restype = ctypes.c_char_p
+        c_transcode_audio.argtypes = [ctypes.c_char_p, ctypes.c_size_t, cb_type]
+        exc = None
+        i = 0
+        segments = []
+        def wrap(array, size, _unused):
+            nonlocal i
+            nonlocal exc
+            try:
+                ty = ctypes.c_byte * size
+                array = ctypes.cast(array, ctypes.POINTER(ty)).contents
+                self.transcribe_chunk(i, array, segments)
+                progress_hooks.subphase_step()
+                i += 1
+            except BaseException as e:
+                exc = e
+                return b"Python exception"
+            return None
+        err = c_transcode_audio(path.encode(), self.N_SAMPLES, cb_type(wrap))
+        if exc is not None:
+            raise exc
+        if err is not None:
+            raise Exception(f'Decode error: {err.decode()}')
+        return segments
 
 class LocalLLM(object):
     def __init__(self,
@@ -160,61 +260,27 @@ def make_cache_dir():
     os.makedirs(alt_path, exist_ok=True)
     return alt_path
 
-AUDIO_RATE = 16000
-N_SAMPLES = AUDIO_RATE * 60 * 5
-def decode_audio(tmpdir, callback):
-    import ctypes
-    import numpy as np
+def load_native():
     if sys.platform == 'darwin':
         name = 'libnative.dylib'
     elif sys.platform == 'linux':
         name = 'libnative.so'
     elif sys.platform == 'win32':
         name = 'native.dll'
-    lib = ctypes.CDLL(f'{os.path.dirname(__file__)}/{name}')
+    return ctypes.CDLL(f'{os.path.dirname(__file__)}/{name}')
 
-    cb_type = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.POINTER(ctypes.c_float), ctypes.c_size_t)
+WHISPER_PROVIDERS = {
+    LOCAL_PROVIDER: LocalWhisper,
+    'openai': OpenaiWhisper
+}
 
-    c_decode_audio = lib.decode_audio
-    c_decode_audio.restype = ctypes.c_char_p
-    c_decode_audio.argtypes = [ctypes.c_char_p, ctypes.c_size_t, cb_type]
-    exc = None
-    def wrap(array, size):
-        try:
-            ty = ctypes.c_float * size
-            array = ctypes.cast(array, ctypes.POINTER(ty)).contents
-            callback(np.frombuffer(array, dtype=np.float32, count=size))
-        except BaseException as e:
-            nonlocal exc
-            exc = e
-            return -1
-        return 0
-    err = c_decode_audio(f'{tmpdir}/{AUDIO_FILE}'.encode(), N_SAMPLES, cb_type(wrap))
-    if exc is not None:
-        raise exc
-    if err is not None:
-        raise Exception(f'Decode error: {err.decode()}')
-
-def generate_captions(progress_hooks, duration, ydl, video_url, tmpdir, model_name, verbose):
-    import whisper_cpp
-
+def generate_captions(progress_hooks, duration, ydl, video_url,
+                      tmpdir, whisper_provider = LOCAL_PROVIDER, **kwargs):
     progress_hooks.phase(2, 'Downloading audio track', 1, bytes = True)
     ydl.download(video_url)
-    aheads_name = model_name.replace('.', '_').replace('-', '_').upper()
-    model = huggingface_hub.hf_hub_download('ggerganov/whisper.cpp', f'ggml-{model_name}.bin')
-    ws = whisper_cpp.Whisper(model, getattr(whisper_cpp, f'WHISPER_AHEADS_{aheads_name}'), verbose)
-    progress_hooks.phase(3, 'Generating transcript', math.ceil(duration / 300))
-    segments = []
-    i = 0
-    def callback(samples):
-        nonlocal i
-        seg = ws.transcribe(samples)
-        for s in seg:
-            segments.append(Segment(s.start + i * 300, s.end + i * 300, s.text))
-        progress_hooks.subphase_step()
-        i += 1
-    decode_audio(tmpdir, callback)
-    return segments
+    whisper = WHISPER_PROVIDERS[whisper_provider](**kwargs)
+    progress_hooks.phase(3, 'Generating transcript', math.ceil(duration / whisper.CHUNK_SECS))
+    return whisper.generate_captions(f'{tmpdir}/{AUDIO_FILE}', progress_hooks)
 
 def sectionize_captions(captions, duration):
     sections = []
@@ -277,8 +343,7 @@ TIME_URL_FNS = [
     TimeUrlFn('twitch', time_url_twitch)
 ]
 
-LOCAL_PROVIDER = 'local'
-PROVIDERS = {
+LLM_PROVIDERS = {
     LOCAL_PROVIDER: LocalLLM,
     'openai': OpenaiLLM,
     'groq': OpenaiLLM,
@@ -318,7 +383,7 @@ class YdlLogger(object):
 def process_video(progress_hooks, video_url, *,
                   llm_provider = LOCAL_PROVIDER,
                   sponsorblock = [],
-                  whisper_model = WHISPER_DEFAULT,
+                  local_whisper_model = LOCAL_WHISPER_DEFAULT,
                   force_local_transcribe = False,
                   verbose = False,
                   **kwargs):
@@ -340,7 +405,7 @@ def process_video(progress_hooks, video_url, *,
                 progress_hooks.phase(1, 'Downloading captions')
                 captions = download_captions(video_info)
             if captions is None:
-                captions = generate_captions(progress_hooks, duration, ydl, video_url, tmpdir, whisper_model, verbose)
+                captions = generate_captions(progress_hooks, duration, ydl, video_url, tmpdir, verbose = verbose, **kwargs)
     video_id = video_info['id']
     if video_info['extractor'].startswith('youtube'):
         captions = remove_sponsored(video_id, sponsorblock, captions)
@@ -354,7 +419,7 @@ def process_video(progress_hooks, video_url, *,
         del sections[-1][-1]
     llm_runs = sum(len(x) for x in sections) + len(sections)
     progress_hooks.phase(4, 'Generating summaries', llm_runs)
-    llm = PROVIDERS[llm_provider](verbose = verbose, **kwargs)
+    llm = LLM_PROVIDERS[llm_provider](verbose = verbose, **kwargs)
     try:
         summaries = [summarize_hour(progress_hooks, llm, x) for x in sections]
     finally:

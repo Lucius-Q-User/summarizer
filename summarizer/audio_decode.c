@@ -29,7 +29,9 @@ int asprintf(char **ret_str, const char *format, ...) {
 }
 #endif
 
-typedef int (*buffer_cb)(float *data, size_t size);
+#define MIN(a, b) ((a) < (b) ? (a) : (b))
+
+typedef char *(*buffer_cb)(int16_t *data, size_t size, void *userdata);
 
 static char *format_error(const char *outer, int err) {
     char *str_err = NULL;
@@ -46,19 +48,19 @@ struct filter {
 };
 
 struct buffer {
-    float *data;
+    int16_t *data;
     size_t size;
     size_t ptr;
 };
 
-static char *add_to_buffer(AVFrame *frame, struct buffer *buffer, buffer_cb callback) {
+static char *add_to_buffer(AVFrame *frame, struct buffer *buffer, buffer_cb callback, void *userdata) {
     int16_t *data = (int16_t *)frame->data[0];
     for (int i = 0; i < frame->nb_samples; i++) {
-        float sample = (float)(data[i]) / 32768.0f;
-        buffer->data[buffer->ptr++] = sample;
+        buffer->data[buffer->ptr++] = data[i];
         if (buffer->ptr == buffer->size) {
-            if (callback(buffer->data, buffer->ptr) < 0) {
-                return strdup("callback error");
+            char *err = callback(buffer->data, buffer->ptr, userdata);
+            if (err) {
+                return err;
             }
             buffer->ptr = 0;
         }
@@ -66,7 +68,7 @@ static char *add_to_buffer(AVFrame *frame, struct buffer *buffer, buffer_cb call
     return NULL;
 }
 
-static char *receive_and_filter(AVFrame *frame, AVFrame *filt_frame, AVCodecContext *dec_ctx, struct filter *filter, struct buffer *buffer, buffer_cb callback) {
+static char *receive_and_filter(AVFrame *frame, AVFrame *filt_frame, AVCodecContext *dec_ctx, struct filter *filter, struct buffer *buffer, buffer_cb callback, void *userdata) {
     int err;
     char *str_err = NULL;
     while ((err = avcodec_receive_frame(dec_ctx, frame)) == 0) {
@@ -76,7 +78,7 @@ static char *receive_and_filter(AVFrame *frame, AVFrame *filt_frame, AVCodecCont
             goto loop_end;
         }
         while ((err = av_buffersink_get_frame(filter->sink_ctx, filt_frame)) == 0) {
-            str_err = add_to_buffer(filt_frame, buffer, callback);
+            str_err = add_to_buffer(filt_frame, buffer, callback, userdata);
             av_frame_unref(filt_frame);
             if (str_err != NULL) {
                 goto loop_end;
@@ -187,7 +189,149 @@ static struct filter create_filter_graph(AVRational time_base, AVCodecContext *d
     goto out;
 }
 
-EXPORT char *decode_audio(const char *path, size_t block_size, buffer_cb callback) {
+static int write_packet(struct buffer *write_buf, const uint8_t *buf, int buf_size) {
+    if (write_buf->ptr + buf_size > write_buf->size) {
+        size_t nsize = write_buf->size * 2;
+        write_buf->data = realloc(write_buf->data, nsize);
+        write_buf->size = nsize;
+    }
+    char *target = (char*)write_buf->data;
+    memcpy(target + write_buf->ptr, buf, buf_size);
+    write_buf->ptr += buf_size;
+    return 0;
+}
+
+char *encode_audio(int16_t *buf, size_t size, buffer_cb py_callback) {
+    const AVCodec *codec = avcodec_find_encoder(AV_CODEC_ID_OPUS);
+    if (!codec) {
+        return strdup("Unable to find codec for opus");
+    }
+    AVFormatContext *out_ctx;
+    int err = avformat_alloc_output_context2(&out_ctx, NULL, "ogg", NULL);
+    if (err < 0) {
+        return strdup("Unable to create format context");
+    }
+    AVStream *stream = avformat_new_stream(out_ctx, NULL);
+    if (!stream) {
+        return strdup("Failed to create stream");
+    }
+    AVCodecContext *encode_ctx = avcodec_alloc_context3(codec);
+    encode_ctx->bit_rate = 32000;
+    encode_ctx->sample_fmt = AV_SAMPLE_FMT_S16;
+    encode_ctx->sample_rate = 16000;
+    encode_ctx->ch_layout = (AVChannelLayout)AV_CHANNEL_LAYOUT_MONO;
+    char *str_err = NULL;
+    err = avcodec_open2(encode_ctx, codec, NULL);
+    if (err < 0) {
+        str_err = format_error("opening decoder", err);
+        goto out_free_ctx;
+    }
+    err = avcodec_parameters_from_context(stream->codecpar, encode_ctx);
+    if (err < 0) {
+        str_err = format_error("filling codec parameters", err);
+        goto out_free_ctx;
+    }
+    stream->time_base = encode_ctx->time_base;
+    AVPacket *packet = av_packet_alloc();
+    AVFrame *frame = av_frame_alloc();
+    frame->nb_samples = encode_ctx->frame_size;
+    frame->format = encode_ctx->sample_fmt;
+    err = av_channel_layout_copy(&frame->ch_layout, &encode_ctx->ch_layout);
+    if (err < 0) {
+        str_err = format_error("copying layout", err);
+        goto out_free_frame;
+    }
+    err = av_frame_get_buffer(frame, 0);
+    if (err < 0) {
+        str_err = format_error("allocating buffers", err);
+        goto out_free_frame;
+    }
+    void *io_buf = av_malloc(4096);
+    struct buffer write_buf = {
+        .data = malloc(1024 * 1024),
+        .ptr = 0,
+        .size = 1024 * 1024
+    };
+    out_ctx->pb = avio_alloc_context(io_buf, 4096, 1, &write_buf, NULL, (void*)write_packet, NULL);
+    if (!out_ctx->pb) {
+        str_err = strdup("Failed allocating io context");
+        goto out_free_bufs;
+    }
+    err = avformat_write_header(out_ctx, NULL);
+    if (err < 0) {
+        str_err = format_error("writing file headers", err);
+        goto out_free_io_ctx;
+    }
+    size_t processed = 0;
+    while (processed < size) {
+        err = av_frame_make_writable(frame);
+        if (err < 0) {
+            str_err = format_error("making frame writeable", err);
+            goto out_free_io_ctx;
+        }
+        int16_t *samples = (int16_t*)frame->data[0];
+        size_t to_process = MIN(frame->nb_samples, size - processed);
+        memcpy(samples, buf + processed, to_process * sizeof(int16_t));
+        processed += to_process;
+        frame->nb_samples = (int)to_process;
+        err = avcodec_send_frame(encode_ctx, frame);
+        if (err < 0) {
+            str_err = format_error("sending packet to encoder", err);
+            goto out_free_io_ctx;
+        }
+        while ((err = avcodec_receive_packet(encode_ctx, packet)) == 0) {
+            err = av_interleaved_write_frame(out_ctx, packet);
+            if (err < 0) {
+                str_err = format_error("writing packet", err);
+                goto out_free_io_ctx;
+            }
+            av_packet_unref(packet);
+        }
+        if (err != AVERROR_EOF && err != AVERROR(EAGAIN)) {
+            str_err = format_error("receiving packet", err);
+            goto out_free_io_ctx;
+        }
+    }
+    err = avcodec_send_frame(encode_ctx, NULL);
+    if (err < 0) {
+        str_err = format_error("flushing encoder", err);
+        goto out_free_io_ctx;
+    }
+
+    while ((err = avcodec_receive_packet(encode_ctx, packet)) == 0) {
+        err = av_interleaved_write_frame(out_ctx, packet);
+        if (err < 0) {
+            str_err = format_error("writing packet", err);
+            goto out_free_io_ctx;
+        }
+        av_packet_unref(packet);
+    }
+    if (err != AVERROR_EOF && err != AVERROR(EAGAIN)) {
+        str_err = format_error("receiving packet", err);
+        goto out_free_io_ctx;
+    }
+
+    err = av_write_trailer(out_ctx);
+    if (err < 0) {
+        str_err = format_error("writing trailer", err);
+        goto out_free_io_ctx;
+    }
+    str_err = py_callback(write_buf.data, write_buf.ptr, NULL);
+  out_free_io_ctx:
+    avio_context_free(&out_ctx->pb);
+  out_free_bufs:
+    av_free(io_buf);
+    free(write_buf.data);
+  out_free_frame:
+    av_frame_free(&frame);
+    av_packet_free(&packet);
+  out_free_ctx:
+    avcodec_free_context(&encode_ctx);
+    avformat_free_context(out_ctx);
+    return str_err;
+}
+
+EXPORT char *decode_audio(const char *path, size_t block_size, buffer_cb callback, void *userdata) {
     AVFormatContext *fmt_ctx = NULL;
     char *str_err = NULL;
     int err = avformat_open_input(&fmt_ctx, path, NULL, NULL);
@@ -214,7 +358,7 @@ EXPORT char *decode_audio(const char *path, size_t block_size, buffer_cb callbac
     }
 
     AVCodecParameters *codec_params = fmt_ctx->streams[stream_id]->codecpar;
-    AVCodec *decoder = avcodec_find_decoder(codec_params->codec_id);
+    const AVCodec *decoder = avcodec_find_decoder(codec_params->codec_id);
     if (!decoder) {
         asprintf(&str_err, "can't find decoder for codec: %s", avcodec_get_name(codec_params->codec_id));
         goto out_close_input;
@@ -255,7 +399,7 @@ EXPORT char *decode_audio(const char *path, size_t block_size, buffer_cb callbac
             str_err = format_error("sending packet to decoder", err);
             goto loop_end;
         }
-        str_err = receive_and_filter(frame, filt_frame, dec_ctx, &filter, &buffer, callback);
+        str_err = receive_and_filter(frame, filt_frame, dec_ctx, &filter, &buffer, callback, userdata);
       loop_end:
         av_packet_unref(packet);
         if (str_err != NULL) {
@@ -271,11 +415,9 @@ EXPORT char *decode_audio(const char *path, size_t block_size, buffer_cb callbac
         str_err = format_error("sending packet to decoder", err);
         goto out_free_packet;
     }
-    str_err = receive_and_filter(frame, filt_frame, dec_ctx, &filter, &buffer, callback);
+    str_err = receive_and_filter(frame, filt_frame, dec_ctx, &filter, &buffer, callback, userdata);
     if (str_err == NULL) {
-        if (callback(buffer.data, buffer.ptr) < 0) {
-            str_err = strdup("callback error");
-        }
+        str_err = callback(buffer.data, buffer.ptr, userdata);
     }
 
   out_free_packet:
@@ -290,4 +432,8 @@ EXPORT char *decode_audio(const char *path, size_t block_size, buffer_cb callbac
     avformat_close_input(&fmt_ctx);
   out_ret:
     return str_err;
+}
+
+EXPORT char *transcode_audio(const char *path, size_t block_size, buffer_cb callback) {
+    return decode_audio(path, block_size, (void*)encode_audio, callback);
 }

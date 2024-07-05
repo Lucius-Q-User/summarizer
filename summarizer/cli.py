@@ -3,7 +3,7 @@
 import os
 from argparse import ArgumentParser
 import shutil
-from .summarizer import process_video, load_config, PROVIDERS, WHISPER_DEFAULT
+from .summarizer import process_video, load_config, LLM_PROVIDERS, LOCAL_WHISPER_DEFAULT, WHISPER_PROVIDERS
 from tqdm import tqdm
 
 OUT_DIR = 'out'
@@ -47,7 +47,8 @@ def main():
     config = load_config()
     parser = ArgumentParser(prog='summarize')
     parser.add_argument('video_url')
-    parser.add_argument('-lp', '--llm-provider', choices = PROVIDERS.keys(), default = config.get('llm_provider'))
+    parser.add_argument('-lp', '--llm-provider', choices = LLM_PROVIDERS.keys(), default = config.get('llm_provider'))
+    parser.add_argument('-wp', '--whisper-provider', choices = WHISPER_PROVIDERS.keys(), default = config.get('whisper_provider'))
     parser.add_argument('-sb', '--sponsorblock',
                         choices = ['sponsor', 'selfpromo', 'interaction', 'intro', 'outro', 'preview', 'music', 'offtopic', 'filler'],
                         action = 'append', default = config.get('sponsorblock'))
@@ -56,8 +57,8 @@ def main():
     parser.add_argument('-hm', '--huggingchat-model', default = config.get('huggingchat_model'))
     parser.add_argument('-om', '-gm', '--openai-model', '--groq-model', default = config.get('openai_model'))
     parser.add_argument('-ou', '--openai-base-url', default = config.get('openai_base_url'))
-    parser.add_argument('-wm', '--whisper-model',
-                        choices = ['tiny', 'tiny.en', 'base', WHISPER_DEFAULT, 'small', 'small.en', 'medium', 'medium.en', 'large-v1', 'large-v2', 'large-v3'],
+    parser.add_argument('-lwm', '-wm', '--local-whisper-model' '--whisper-model',
+                        choices = ['tiny', 'tiny.en', 'base', LOCAL_WHISPER_DEFAULT, 'small', 'small.en', 'medium', 'medium.en', 'large-v1', 'large-v2', 'large-v3'],
                         default = config.get('whisper_model'))
     parser.add_argument('-v', '--verbose', default = config.get('verbose'), action  = 'store_true')
     parser.add_argument('--force-local-transcribe', action = 'store_true')
