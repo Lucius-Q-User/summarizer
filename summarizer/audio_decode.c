@@ -236,6 +236,7 @@ char *encode_audio(int16_t *buf, size_t size, buffer_cb py_callback) {
     AVFrame *frame = av_frame_alloc();
     frame->nb_samples = encode_ctx->frame_size;
     frame->format = encode_ctx->sample_fmt;
+    frame->pts = 0;
     err = av_channel_layout_copy(&frame->ch_layout, &encode_ctx->ch_layout);
     if (err < 0) {
         str_err = format_error("copying layout", err);
@@ -291,6 +292,8 @@ char *encode_audio(int16_t *buf, size_t size, buffer_cb py_callback) {
             str_err = format_error("receiving packet", err);
             goto out_free_io_ctx;
         }
+        AVRational pts_off = av_mul_q(av_div_q(encode_ctx->time_base, stream->time_base), av_make_q((int)to_process, 1));
+        frame->pts += (int64_t) av_q2d(pts_off);
     }
     err = avcodec_send_frame(encode_ctx, NULL);
     if (err < 0) {
