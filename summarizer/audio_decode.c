@@ -21,7 +21,7 @@ int asprintf(char **ret_str, const char *format, ...) {
     va_list args, args2;
     va_start(args, format);
     va_copy(args2, args);
-    int len = _vscprintf(format, args2) + 1;
+    int len = vsnprintf(NULL, 0, format, args2) + 1;
     char *str = malloc(len);
     int ret = vsnprintf(str, len, format, args);
     *ret_str = str;
