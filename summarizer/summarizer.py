@@ -183,7 +183,6 @@ class OpenaiLLM(object):
     def run_llm(self, prompt):
         req = {
             'model': self.model,
-            'max_tokens': 32768,
             'messages': [
                 {'role': 'user','content': prompt}
             ]
