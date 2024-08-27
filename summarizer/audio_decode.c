@@ -334,6 +334,41 @@ char *encode_audio(int16_t *buf, size_t size, buffer_cb py_callback) {
     return str_err;
 }
 
+static char *find_audio_stream(const AVFormatContext *fmt_ctx, int *stream_id) {
+    *stream_id = -1;
+    for (int i = 0; i < fmt_ctx->nb_streams; i++) {
+        if (fmt_ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
+            *stream_id = i;
+            break;
+        }
+    }
+    if (*stream_id == -1) {
+        return strdup("Unable to find the audio stream");
+    }
+    return NULL;
+}
+
+EXPORT char *get_duration(const char *path, uint64_t *duration) {
+    AVFormatContext *fmt_ctx = NULL;
+    char *str_err = NULL;
+    int err = avformat_open_input(&fmt_ctx, path, NULL, NULL);
+    if (err < 0) {
+        str_err = format_error("opening input", err);
+        goto out_ret;
+    }
+    err = avformat_find_stream_info(fmt_ctx, NULL);
+    if (err < 0) {
+        str_err = format_error("getting stream info", err);
+        goto out_close_input;
+    }
+    *duration = (uint64_t)(fmt_ctx->duration / AV_TIME_BASE);
+
+  out_close_input:
+    avformat_close_input(&fmt_ctx);
+  out_ret:
+    return str_err;
+}
+
 EXPORT char *decode_audio(const char *path, size_t block_size, buffer_cb callback, void *userdata) {
     AVFormatContext *fmt_ctx = NULL;
     char *str_err = NULL;
@@ -348,15 +383,9 @@ EXPORT char *decode_audio(const char *path, size_t block_size, buffer_cb callbac
         goto out_close_input;
     }
 
-    int stream_id = -1;
-    for (int i = 0; i < fmt_ctx->nb_streams; i++) {
-        if (fmt_ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
-            stream_id = i;
-            break;
-        }
-    }
-    if (stream_id == -1) {
-        str_err = strdup("Unable to find the audio stream");
+    int stream_id;
+    str_err = find_audio_stream(fmt_ctx, &stream_id);
+    if (str_err != NULL) {
         goto out_close_input;
     }
 

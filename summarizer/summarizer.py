@@ -273,13 +273,13 @@ WHISPER_PROVIDERS = {
     'openai': OpenaiWhisper
 }
 
-def generate_captions(progress_hooks, duration, ydl, video_url,
-                      tmpdir, whisper_provider = LOCAL_PROVIDER, **kwargs):
+def generate_captions(progress_hooks, duration, fsrc,
+                      whisper_provider = LOCAL_PROVIDER, **kwargs):
     progress_hooks.phase(2, 'Downloading audio track', 1, bytes = True)
-    ydl.download(video_url)
+    fsrc.download()
     whisper = WHISPER_PROVIDERS[whisper_provider](**kwargs)
     progress_hooks.phase(3, 'Generating transcript', math.ceil(duration / whisper.CHUNK_SECS))
-    return whisper.generate_captions(f'{tmpdir}/{AUDIO_FILE}', progress_hooks)
+    return whisper.generate_captions(fsrc.download_path, progress_hooks)
 
 def sectionize_captions(captions, duration):
     sections = []
@@ -379,6 +379,63 @@ class YdlLogger(object):
     def error(self, msg):
         pass
 
+class LocalFileSource(object):
+    def __init__(self, progress_hooks, video_url, verbose):
+        self.video_url = video_url
+    def __enter__(self):
+        self.download_path = self.video_url
+        return self
+    def __exit__(self, exc_type, exc_value, traceback):
+        return None
+    def download(self):
+        pass
+    def extract_info(self):
+        name = os.path.splitext(os.path.basename(self.video_url))[0]
+        abspath = os.path.abspath(self.video_url)
+        lib = load_native()
+        c_get_duration = lib.get_duration
+        c_get_duration.restype = ctypes.c_char_p
+        c_get_duration.argtypes = [ctypes.c_char_p, ctypes.POINTER(ctypes.c_uint64)]
+        duration = ctypes.c_uint64()
+        err = c_get_duration(abspath.encode(), ctypes.byref(duration))
+        if err is not None:
+            raise Exception(f'Error getting file duration: {err.decode()}')
+        return {
+            'extractor': '',
+            'id': name,
+            'title': name,
+            'webpage_url': f'file://{abspath}',
+            'duration': duration.value
+        }
+
+class YdlFileSource(object):
+    def __init__(self, progress_hooks, video_url, verbose):
+        self.progress_hooks = progress_hooks
+        self.video_url = video_url
+        self.verbose = verbose
+    def __enter__(self):
+        self.tmpdir_cm = TemporaryDirectory()
+        tmpdir = self.tmpdir_cm.__enter__()
+        info = {
+            'format': 'm4a/bestaudio/best',
+            'paths': {'temp': tmpdir, 'home': tmpdir},
+            'outtmpl': {'default': AUDIO_FILE},
+            'progress_hooks': [lambda d: ydl_progress(d, self.progress_hooks)]
+        }
+        self.download_path = f'{tmpdir}/{AUDIO_FILE}'
+        if not self.verbose:
+            info['logger'] = YdlLogger()
+        self.ydl_cm = YoutubeDL(info)
+        self.ydl = self.ydl_cm.__enter__()
+        return self
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.ydl_cm.__exit__(exc_type, exc_value, traceback)
+        return self.tmpdir_cm.__exit__(exc_type, exc_value, traceback)
+    def extract_info(self):
+        return self.ydl.extract_info(self.video_url, download=False)
+    def download(self):
+        self.ydl.download(self.video_url)
+
 def process_video(progress_hooks, video_url, *,
                   llm_provider = LOCAL_PROVIDER,
                   sponsorblock = [],
@@ -386,25 +443,22 @@ def process_video(progress_hooks, video_url, *,
                   force_local_transcribe = False,
                   verbose = False,
                   **kwargs):
-    with TemporaryDirectory() as tmpdir:
-        info = {
-            'format': 'm4a/bestaudio/best',
-            'paths': {'temp': tmpdir, 'home': tmpdir},
-            'outtmpl': {'default': AUDIO_FILE},
-            'progress_hooks': [lambda d: ydl_progress(d, progress_hooks)]
-        }
-        if not verbose:
-            info['logger'] = YdlLogger()
-        with YoutubeDL(info) as ydl:
-            progress_hooks.phase(0, 'Getting video info')
-            video_info = ydl.extract_info(video_url, download=False)
-            duration = video_info['duration']
-            captions = None
-            if not force_local_transcribe:
-                progress_hooks.phase(1, 'Downloading captions')
-                captions = download_captions(video_info)
-            if captions is None:
-                captions = generate_captions(progress_hooks, duration, ydl, video_url, tmpdir, verbose = verbose, **kwargs)
+    if video_url.startswith('https://') or video_url.startswith('http://'):
+        source_cls = YdlFileSource
+    elif os.path.isfile(video_url):
+        source_cls = LocalFileSource
+    else:
+        source_cls = YdlFileSource
+    with source_cls(progress_hooks, video_url, verbose) as fsrc:
+        progress_hooks.phase(0, 'Getting video info')
+        video_info = fsrc.extract_info()
+        duration = video_info['duration']
+        captions = None
+        if not force_local_transcribe:
+            progress_hooks.phase(1, 'Downloading captions')
+            captions = download_captions(video_info)
+        if captions is None:
+            captions = generate_captions(progress_hooks, duration, fsrc, verbose = verbose, **kwargs)
     video_id = video_info['id']
     if video_info['extractor'].startswith('youtube'):
         captions = remove_sponsored(video_id, sponsorblock, captions)
