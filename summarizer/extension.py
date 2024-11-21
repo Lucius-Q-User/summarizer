@@ -7,7 +7,6 @@ import os
 from .summarizer import process_video, load_config
 
 OUT_DIR = 'out'
-GROQ_API_KEY_VAR = 'GROQ_API_KEY'
 
 def output(d):
     js = json.dumps(d).encode()
@@ -46,11 +45,6 @@ class ProgressHooks(object):
 def summarize(msg):
     ctx = msg['ctx']
     config = load_config()
-    api_key = config.get(GROQ_API_KEY_VAR, None)
-    api_key = config.get('openai_api_key', api_key)
-    api_key = os.environ.get(GROQ_API_KEY_VAR, api_key)
-    api_key = os.environ.get('OPENAI_API_KEY', api_key)
-    config['openai_api_key'] = api_key
     result = process_video(
         ProgressHooks(ctx), video_url=msg['url'], **config
     )

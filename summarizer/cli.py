@@ -7,7 +7,6 @@ from .summarizer import process_video, load_config, LLM_PROVIDERS, LOCAL_WHISPER
 from tqdm import tqdm
 
 OUT_DIR = 'out'
-GROQ_API_KEY_VAR = 'GROQ_API_KEY'
 
 class ProgressHooks(object):
     def __init__(self):
@@ -45,28 +44,45 @@ class ProgressHooks(object):
 
 def main():
     config = load_config()
+    preparser = ArgumentParser(add_help=False)
+    preparser.add_argument('-aop', '--add-openai-profile', action = 'append', default=config.get('openai_profile', []))
+    preargs = preparser.parse_known_args()[0]
+
+    llm_provider_choices = list(LLM_PROVIDERS.keys())
+    llm_provider_choices.extend(preargs.add_openai_profile)
+    whisper_provider_choices = list(WHISPER_PROVIDERS.keys())
+    whisper_provider_choices.extend(preargs.add_openai_profile)
     parser = ArgumentParser(prog='summarize')
     parser.add_argument('video_url')
-    parser.add_argument('-lp', '--llm-provider', choices = LLM_PROVIDERS.keys(), default = config.get('llm_provider'))
-    parser.add_argument('-wp', '--whisper-provider', choices = WHISPER_PROVIDERS.keys(), default = config.get('whisper_provider'))
+    parser.add_argument('-lp', '--llm-provider', choices = llm_provider_choices, default = config.get('llm_provider'))
+    parser.add_argument('-wp', '--whisper-provider', choices = whisper_provider_choices, default = config.get('whisper_provider'))
     parser.add_argument('-sb', '--sponsorblock',
                         choices = ['sponsor', 'selfpromo', 'interaction', 'intro', 'outro', 'preview', 'music', 'offtopic', 'filler'],
                         action = 'append', default = config.get('sponsorblock'))
     parser.add_argument('-lmr', '--local-model-repo', default = config.get('local_model_repo'))
     parser.add_argument('-lmf', '--local-model-file', default = config.get('local_model_file'))
-    parser.add_argument('-om', '-gm', '--openai-model', '--groq-model', default = config.get('openai_model'))
+    parser.add_argument('-om', '--openai-model', default = config.get('openai_model'))
     parser.add_argument('-ou', '--openai-base-url', default = config.get('openai_base_url'))
-    parser.add_argument('-lwm', '-wm', '--local-whisper-model' '--whisper-model',
+    parser.add_argument('-lwm', '--local-whisper-model',
                         choices = ['tiny', 'tiny.en', 'base', LOCAL_WHISPER_DEFAULT, 'small', 'small.en', 'medium', 'medium.en', 'large-v1', 'large-v2', 'large-v3'],
-                        default = config.get('whisper_model'))
+                        default = config.get('local_whisper_model'))
+    parser.add_argument('-owm', '--openai-whisper-model', default = config.get('openai_whisper_model'))
     parser.add_argument('-v', '--verbose', default = config.get('verbose'), action = 'store_true')
     parser.add_argument('--force-local-transcribe', action = 'store_true')
+    parser.add_argument('-aop', '--add-openai-profile', action = 'append', default=config.get('openai_profile', []))
+    for item in preargs.add_openai_profile:
+        parser.add_argument(f'--{item}-model', default = config.get(f'{item}_model'))
+        parser.add_argument(f'--{item}-base-url', default = config.get(f'{item}_base_url'))
+        parser.add_argument(f'--{item}-whisper-model', default = config.get(f'{item}_whisper_model'))
+
     args = parser.parse_args()
-    api_key = config.get(GROQ_API_KEY_VAR, None)
-    api_key = config.get('openai_api_key', api_key)
-    api_key = os.environ.get(GROQ_API_KEY_VAR, api_key)
+    api_key = config.get('openai_api_key', None)
     api_key = os.environ.get('OPENAI_API_KEY', api_key)
     args.openai_api_key = api_key
+    for item in preargs.add_openai_profile:
+        api_key = config.get(f'{item}_api_key', None)
+        api_key = os.environ.get(f'{item.upper()}_API_KEY', api_key)
+        setattr(args, f'{item}_api_key', api_key)
     kwargs = {k: v for (k, v) in vars(args).items() if v is not None}
     progress = ProgressHooks()
     result = process_video(progress, **kwargs)

@@ -73,17 +73,14 @@ class LocalWhisper(object):
         if err is not None:
             raise Exception(f'Decode error: {err.decode()}')
 
-class OpenaiWhisper(object):
+class BaseOpenaiWhisper(object):
     CHUNK_SECS = 60 * 60
     N_SAMPLES = AUDIO_RATE * CHUNK_SECS
-    def __init__(self, openai_api_key,
-                 openai_base_url = 'https://api.groq.com/openai/v1',
-                 openai_whisper_model = 'whisper-large-v3',
-                 **kwargs):
+    def __init__(self, **kwargs):
         self.lib = load_native()
-        self.api_key = openai_api_key
-        self.base_url = openai_base_url
-        self.model = openai_whisper_model
+        self.api_key = kwargs[f'{self.NAME}_api_key']
+        self.base_url = kwargs.get(f'{self.NAME}_base_url', 'https://api.groq.com/openai/v1')
+        self.model = kwargs.get(f'{self.NAME}_whisper_model', 'whisper-large-v3')
     def transcribe_chunk(self, i, chunk, segments):
         headers = {
             'Authorization': f'Bearer {self.api_key}',
@@ -125,6 +122,11 @@ class OpenaiWhisper(object):
             raise Exception(f'Decode error: {err.decode()}')
         return segments
 
+def OpenaiWhisper(name):
+    class SubWhisper(BaseOpenaiWhisper):
+        NAME = name
+    return SubWhisper
+
 class LocalLLM(object):
     def __init__(self,
                  local_model_repo = 'bartowski/Meta-Llama-3-8B-Instruct-GGUF',
@@ -153,15 +155,12 @@ class ChatgptLLM(object):
     def save_statitstics(self):
         pass
 
-class OpenaiLLM(object):
-    def __init__(self, openai_api_key,
-                 openai_model = 'llama3-8b-8192',
-                 openai_base_url = 'https://api.groq.com/openai/v1',
-                 **kwargs):
-        self.api_key = openai_api_key
-        self.model = openai_model
+class BaseOpenaiLLM(object):
+    def __init__(self, **kwargs):
+        self.api_key = kwargs[f'{self.NAME}_api_key']
+        self.model = kwargs.get(f'{self.NAME}_model', 'llama3-8b-8192')
         self.tokens_used = 0
-        self.base_url = openai_base_url
+        self.base_url = kwargs.get(f'{self.NAME}_base_url', 'https://api.groq.com/openai/v1')
     def run_llm(self, prompt):
         req = {
             'model': self.model,
@@ -187,6 +186,10 @@ class OpenaiLLM(object):
         with open(f'{alt_path}/usage.csv', 'a') as usage:
             usage.write(f'{datetime.now().isoformat()},{self.tokens_used}\n')
 
+def OpenaiLLM(name):
+    class SubLLM(BaseOpenaiLLM):
+        NAME = name
+    return SubLLM
 
 def find_json3(fmts):
     for fmt in fmts:
@@ -252,14 +255,17 @@ def load_native():
 
 WHISPER_PROVIDERS = {
     LOCAL_PROVIDER: LocalWhisper,
-    'openai': OpenaiWhisper
+    'openai': OpenaiWhisper('openai')
 }
 
 def generate_captions(progress_hooks, duration, ydl, video_url,
-                      tmpdir, whisper_provider = LOCAL_PROVIDER, **kwargs):
+                      tmpdir, add_openai_profile, whisper_provider = LOCAL_PROVIDER, **kwargs):
     progress_hooks.phase(2, 'Downloading audio track', 1, bytes = True)
     ydl.download(video_url)
-    whisper = WHISPER_PROVIDERS[whisper_provider](**kwargs)
+    whisper_providers = dict(**WHISPER_PROVIDERS)
+    for profile in add_openai_profile:
+        whisper_providers[profile] = OpenaiWhisper(profile)
+    whisper = whisper_providers[whisper_provider](**kwargs)
     progress_hooks.phase(3, 'Generating transcript', math.ceil(duration / whisper.CHUNK_SECS))
     return whisper.generate_captions(f'{tmpdir}/{AUDIO_FILE}', progress_hooks)
 
@@ -326,8 +332,7 @@ TIME_URL_FNS = [
 
 LLM_PROVIDERS = {
     LOCAL_PROVIDER: LocalLLM,
-    'openai': OpenaiLLM,
-    'groq': OpenaiLLM,
+    'openai': OpenaiLLM('openai'),
     'chatgpt': ChatgptLLM,
 }
 
@@ -366,6 +371,7 @@ def process_video(progress_hooks, video_url, *,
                   local_whisper_model = LOCAL_WHISPER_DEFAULT,
                   force_local_transcribe = False,
                   verbose = False,
+                  add_openai_profile = [],
                   **kwargs):
     with TemporaryDirectory() as tmpdir:
         info = {
@@ -385,7 +391,11 @@ def process_video(progress_hooks, video_url, *,
                 progress_hooks.phase(1, 'Downloading captions')
                 captions = download_captions(video_info)
             if captions is None:
-                captions = generate_captions(progress_hooks, duration, ydl, video_url, tmpdir, verbose = verbose, **kwargs)
+                captions = generate_captions(
+                    progress_hooks, duration, ydl,
+                    video_url, tmpdir, verbose = verbose,
+                    add_openai_profile = add_openai_profile, **kwargs
+                )
     video_id = video_info['id']
     if video_info['extractor'].startswith('youtube'):
         captions = remove_sponsored(video_id, sponsorblock, captions)
@@ -399,7 +409,10 @@ def process_video(progress_hooks, video_url, *,
         del sections[-1][-1]
     llm_runs = sum(len(x) for x in sections) + len(sections)
     progress_hooks.phase(4, 'Generating summaries', llm_runs)
-    llm = LLM_PROVIDERS[llm_provider](verbose = verbose, **kwargs)
+    llm_providers = dict(**LLM_PROVIDERS)
+    for profile in add_openai_profile:
+        llm_providers[profile] = OpenaiLLM(profile)
+    llm = llm_providers[llm_provider](verbose = verbose, **kwargs)
     try:
         summaries = [summarize_hour(progress_hooks, llm, x) for x in sections]
     finally:
