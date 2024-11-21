@@ -54,13 +54,12 @@ def main():
                         action = 'append', default = config.get('sponsorblock'))
     parser.add_argument('-lmr', '--local-model-repo', default = config.get('local_model_repo'))
     parser.add_argument('-lmf', '--local-model-file', default = config.get('local_model_file'))
-    parser.add_argument('-hm', '--huggingchat-model', default = config.get('huggingchat_model'))
     parser.add_argument('-om', '-gm', '--openai-model', '--groq-model', default = config.get('openai_model'))
     parser.add_argument('-ou', '--openai-base-url', default = config.get('openai_base_url'))
     parser.add_argument('-lwm', '-wm', '--local-whisper-model' '--whisper-model',
                         choices = ['tiny', 'tiny.en', 'base', LOCAL_WHISPER_DEFAULT, 'small', 'small.en', 'medium', 'medium.en', 'large-v1', 'large-v2', 'large-v3'],
                         default = config.get('whisper_model'))
-    parser.add_argument('-v', '--verbose', default = config.get('verbose'), action  = 'store_true')
+    parser.add_argument('-v', '--verbose', default = config.get('verbose'), action = 'store_true')
     parser.add_argument('--force-local-transcribe', action = 'store_true')
     args = parser.parse_args()
     api_key = config.get(GROQ_API_KEY_VAR, None)
