@@ -46,7 +46,7 @@ def summarize(msg):
     ctx = msg['ctx']
     config = load_config()
     result = process_video(
-        ProgressHooks(ctx), video_url=msg['url'], **config
+        ProgressHooks(ctx), video_url=msg['url'], transcript_only=True, **config
     )
     filename = f'{OUT_DIR}/{result.video_id}.html'
     os.makedirs(OUT_DIR, exist_ok = True)
