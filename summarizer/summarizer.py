@@ -372,6 +372,7 @@ def process_video(progress_hooks, video_url, *,
                   force_local_transcribe = False,
                   verbose = False,
                   add_openai_profile = [],
+                  transcript_only = False,
                   **kwargs):
     with TemporaryDirectory() as tmpdir:
         info = {
@@ -399,6 +400,10 @@ def process_video(progress_hooks, video_url, *,
     video_id = video_info['id']
     if video_info['extractor'].startswith('youtube'):
         captions = remove_sponsored(video_id, sponsorblock, captions)
+
+    if transcript_only:
+        transcript = "\n".join([c.text for c in captions])
+        return ProcessResult(video_id, transcript)
 
     sections = sectionize_captions(captions, duration)
     if duration > 3600 and duration % 3600 < 60:

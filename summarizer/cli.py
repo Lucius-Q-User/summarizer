@@ -59,6 +59,7 @@ def main():
     parser.add_argument('-sb', '--sponsorblock',
                         choices = ['sponsor', 'selfpromo', 'interaction', 'intro', 'outro', 'preview', 'music', 'offtopic', 'filler'],
                         action = 'append', default = config.get('sponsorblock'))
+    parser.add_argument('--transcript-only', action='store_true', help='Only return the transcript, skip summarization')
     parser.add_argument('-lmr', '--local-model-repo', default = config.get('local_model_repo'))
     parser.add_argument('-lmf', '--local-model-file', default = config.get('local_model_file'))
     parser.add_argument('-om', '--openai-model', default = config.get('openai_model'))
@@ -87,14 +88,18 @@ def main():
     progress = ProgressHooks()
     result = process_video(progress, **kwargs)
     progress.close()
-    filename = os.path.join(OUT_DIR, f'{result.video_id}.html')
+    output_text = result.summary  # Get the transcript or summary
+    file_extension = "txt" if args.transcript_only else "html"
+    filename = os.path.join(OUT_DIR, f'{result.video_id}.{file_extension}')
     os.makedirs(OUT_DIR, exist_ok = True)
     with open(filename, 'wb') as out:
-        out.write(result.summary.encode('utf-8'))
-    for opener in ['open', 'xdg-open']:
-        if shutil.which(opener) is not None:
-            os.execlp(opener, opener, filename)
-            return
-    if shutil.which('cmd') is not None:
-        os.execlp('cmd', 'cmd', '/c', filename)
+        out.write(output_text.encode('utf-8'))
+
+    if not args.transcript_only:
+        for opener in ['open', 'xdg-open']:
+            if shutil.which(opener) is not None:
+                os.execlp(opener, opener, filename)
+                return
+        if shutil.which('cmd') is not None:
+            os.execlp('cmd', 'cmd', '/c', filename)
     print(f'Unable to open the file automatically, the output was written to {filename}')
